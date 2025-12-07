@@ -35,6 +35,69 @@ const COUNTRY_OPTIONS = [
     { key: "France", label: "France" },
 ];
 
+// Helper: compute summary metrics from combined series
+function computeMetrics(combined) {
+    if (!combined || combined.length === 0) {
+        return null;
+    }
+
+    // Peak new cases
+    let peakCases = combined[0].newCases;
+    let peakCasesDate = combined[0].date;
+    combined.forEach((row) => {
+        if (row.newCases > peakCases) {
+            peakCases = row.newCases;
+            peakCasesDate = row.date;
+        }
+    });
+
+    // Worst GDP (min value)
+    let worstGdp = combined[0].gdpGrowth;
+    let worstGdpDate = combined[0].date;
+    combined.forEach((row) => {
+        if (row.gdpGrowth < worstGdp) {
+            worstGdp = row.gdpGrowth;
+            worstGdpDate = row.date;
+        }
+    });
+
+    // Correlation between newCases and gdpGrowth
+    let corr = null;
+    if (combined.length > 1) {
+        const xs = combined.map((r) => r.newCases);
+        const ys = combined.map((r) => r.gdpGrowth);
+
+        const n = xs.length;
+        const meanX = xs.reduce((s, v) => s + v, 0) / n;
+        const meanY = ys.reduce((s, v) => s + v, 0) / n;
+
+        let cov = 0;
+        let varX = 0;
+        let varY = 0;
+        for (let i = 0; i < n; i++) {
+            const dx = xs[i] - meanX;
+            const dy = ys[i] - meanY;
+            cov += dx * dy;
+            varX += dx * dx;
+            varY += dy * dy;
+        }
+
+        if (varX > 0 && varY > 0) {
+            corr = cov / Math.sqrt(varX * varY);
+        } else {
+            corr = null;
+        }
+    }
+
+    return {
+        peakCases,
+        peakCasesDate,
+        worstGdp,
+        worstGdpDate,
+        corr,
+    };
+}
+
 function Dashboard() {
     const [selectedCountryKey, setSelectedCountryKey] = useState("US");
 
@@ -44,8 +107,6 @@ function Dashboard() {
 
     const { loading, error, combined, covidDaily, gdpWeekly } =
         useCovidGdpApiData(selectedCountryKey);
-
-    // ----- Render states -----
 
     if (loading) {
         return (
@@ -87,6 +148,9 @@ function Dashboard() {
             </main>
         );
     }
+
+    // ----- Metrics -----
+    const metrics = computeMetrics(combined);
 
     // ----- Build chart datasets from combined -----
 
@@ -225,14 +289,12 @@ function Dashboard() {
                 onSelect={setSelectedCountryKey}
             />
 
-            <section style={{ marginTop: "1.5rem" }}>
-                <h2>Dataset overview ({selectedCountry.label})</h2>
-                <ul>
-                    <li>Total COVID daily records: {covidDaily.length}</li>
-                    <li>Total GDP weekly points: {gdpWeekly.length}</li>
-                    <li>Joined (matching-date) points: {combined.length}</li>
-                </ul>
-            </section>
+            <SummaryCards
+                countryName={selectedCountry.label}
+                metrics={metrics}
+                totalCovidRecords={covidDaily.length}
+                totalGdpRecords={gdpWeekly.length}
+            />
 
             <section style={{ marginTop: "2rem", maxWidth: "1000px" }}>
                 <h2>Time series: COVID-19 new cases vs GDP growth</h2>
@@ -363,6 +425,130 @@ function CountryCards({ selectedKey, onSelect }) {
                         </button>
                     );
                 })}
+            </div>
+        </section>
+    );
+}
+
+// Summary metrics cards
+function SummaryCards({
+    countryName,
+    metrics,
+    totalCovidRecords,
+    totalGdpRecords,
+}) {
+    if (!metrics) return null;
+
+    const { peakCases, peakCasesDate, worstGdp, worstGdpDate, corr } = metrics;
+
+    const corrDisplay =
+        corr == null
+            ? "N/A"
+            : corr.toFixed(2) + (corr > 0 ? " (positive)" : " (negative)");
+
+    return (
+        <section style={{ marginTop: "1.75rem" }}>
+            <h2>Summary metrics ({countryName})</h2>
+            <div
+                style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: "1rem",
+                    marginTop: "0.75rem",
+                }}
+            >
+                {/* Peak cases */}
+                <div
+                    style={{
+                        flex: "1 1 220px",
+                        padding: "1rem",
+                        borderRadius: "0.75rem",
+                        border: "1px solid #e0e0e0",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                        backgroundColor: "#fff",
+                    }}
+                >
+                    <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+                        Peak new cases
+                    </div>
+                    <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
+                        {peakCases.toLocaleString()}
+                    </div>
+                    <div style={{ fontSize: "0.85rem", marginTop: "0.25rem" }}>
+                        on <strong>{peakCasesDate}</strong>
+                    </div>
+                    <div
+                        style={{
+                            fontSize: "0.75rem",
+                            marginTop: "0.5rem",
+                            opacity: 0.7,
+                        }}
+                    >
+                        Based on joined COVID–GDP series ({totalCovidRecords}{" "}
+                        daily records).
+                    </div>
+                </div>
+
+                {/* Worst GDP */}
+                <div
+                    style={{
+                        flex: "1 1 220px",
+                        padding: "1rem",
+                        borderRadius: "0.75rem",
+                        border: "1px solid #e0e0e0",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                        backgroundColor: "#fff",
+                    }}
+                >
+                    <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+                        Worst GDP week
+                    </div>
+                    <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
+                        {worstGdp.toFixed(2)}%
+                    </div>
+                    <div style={{ fontSize: "0.85rem", marginTop: "0.25rem" }}>
+                        on <strong>{worstGdpDate}</strong>
+                    </div>
+                    <div
+                        style={{
+                            fontSize: "0.75rem",
+                            marginTop: "0.5rem",
+                            opacity: 0.7,
+                        }}
+                    >
+                        Based on OECD Weekly Tracker ({totalGdpRecords} weekly
+                        observations).
+                    </div>
+                </div>
+
+                {/* Correlation */}
+                <div
+                    style={{
+                        flex: "1 1 220px",
+                        padding: "1rem",
+                        borderRadius: "0.75rem",
+                        border: "1px solid #e0e0e0",
+                        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+                        backgroundColor: "#fff",
+                    }}
+                >
+                    <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+                        Cases–GDP correlation
+                    </div>
+                    <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
+                        {corrDisplay}
+                    </div>
+                    <div
+                        style={{
+                            fontSize: "0.75rem",
+                            marginTop: "0.5rem",
+                            opacity: 0.7,
+                        }}
+                    >
+                        Pearson correlation between daily new cases and weekly
+                        GDP growth on the joined series.
+                    </div>
+                </div>
             </div>
         </section>
     );
