@@ -1,145 +1,133 @@
 // src/hooks/useCovidGdpApiData.js
 import { useEffect, useState } from "react";
 
-const COVID_API_URL = "https://pomber.github.io/covid19/timeseries.json";
-
-// Map from pomber country key -> OECD Weekly Tracker ISO3 code
-const COUNTRY_MAP = {
-    US: "USA",
-    Germany: "DEU",
-    Italy: "ITA",
-    Japan: "JPN",
-    Canada: "CAN",
-    France: "FRA",
-};
-
 /**
- * Loads COVID daily data + OECD Weekly GDP tracker from public APIs.
+ * Fetch COVID-19 daily time series + World Bank annual GDP growth
+ * Join them by year.
  *
- * covidKey:
- *   - Key in pomber JSON, e.g. "US", "Germany", "Italy", ...
+ * countryKey is assumed to be an ISO2 code (US, DE, IT, JP, CA, FR)
+ * for the World Bank API.
  *
- * Returns:
- *   {
- *     loading,
- *     error,
- *     covidDaily,  // array of { date, confirmed, deaths, recovered, newCases }
- *     gdpWeekly,   // array of { date, gdpGrowth }
- *     combined     // array of { date, gdpGrowth, confirmed, newCases, deaths }
- *   }
+ * We map that to the names used by pomber's COVID dataset.
  */
-export function useCovidGdpApiData(covidKey = "US") {
+export function useCovidGdpApiData(countryKey) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+
     const [covidDaily, setCovidDaily] = useState([]);
-    const [gdpWeekly, setGdpWeekly] = useState([]);
+    const [gdpWeekly, setGdpWeekly] = useState([]); // actually annual here
     const [combined, setCombined] = useState([]);
 
+    // Map ISO2 → pomber's country keys
+    const covidCountryMap = {
+        US: "US",
+        DE: "Germany",
+        IT: "Italy",
+        JP: "Japan",
+        CA: "Canada",
+        FR: "France",
+    };
+
+    const covidKey = covidCountryMap[countryKey] || countryKey;
+
     useEffect(() => {
-        let cancelled = false;
+        async function fetchData() {
+            setLoading(true);
+            setError(null);
 
-        async function load() {
             try {
-                setLoading(true);
-                setError(null);
+                //
+                // 1. COVID API — daily data by country (pombér)
+                //
+                const covidUrl =
+                    "https://pomber.github.io/covid19/timeseries.json";
+                const covidRes = await fetch(covidUrl);
 
-                const oecdIso3 = COUNTRY_MAP[covidKey] || "USA";
-                const gdpApiUrl = `https://api.db.nomics.world/v22/series/OECD/GDP_GROWTH/W.${oecdIso3}.tracker_yoy?format=json&observations=1`;
-
-                // Fetch both APIs in parallel
-                const [covidResp, gdpResp] = await Promise.all([
-                    fetch(COVID_API_URL),
-                    fetch(gdpApiUrl),
-                ]);
-
-                if (!covidResp.ok) {
-                    throw new Error(`COVID API error: ${covidResp.status}`);
-                }
-                if (!gdpResp.ok) {
-                    throw new Error(`GDP API error: ${gdpResp.status}`);
+                if (!covidRes.ok) {
+                    throw new Error("COVID API request failed");
                 }
 
-                const [covidJson, gdpJson] = await Promise.all([
-                    covidResp.json(),
-                    gdpResp.json(),
-                ]);
+                const covidJson = await covidRes.json();
 
-                // ---- COVID: daily series for the chosen country ----
-                const rawCovidSeries = covidJson[covidKey] || [];
-
-                const covidWithNew = rawCovidSeries.map((point, idx) => {
-                    const prev = idx > 0 ? rawCovidSeries[idx - 1] : null;
-                    const confirmed = Number(point.confirmed || 0);
-                    const prevConfirmed = prev
-                        ? Number(prev.confirmed || 0)
-                        : 0;
-                    const newCases = confirmed - prevConfirmed;
-
-                    return {
-                        date: point.date, // "YYYY-MM-DD"
-                        confirmed,
-                        deaths: Number(point.deaths || 0),
-                        recovered: Number(point.recovered || 0),
-                        newCases,
-                    };
-                });
-
-                // ---- GDP: weekly tracker series from DB.nomics ----
-                const seriesDoc = gdpJson?.series?.docs?.[0];
-
-                if (!seriesDoc) {
-                    throw new Error("GDP API: missing series docs in response");
+                if (!covidJson[covidKey]) {
+                    throw new Error(
+                        `No COVID data for country key: ${covidKey}`
+                    );
                 }
 
-                const periods = seriesDoc.period || [];
-                const values = seriesDoc.value || [];
-
-                const gdp = periods.map((date, idx) => ({
-                    date, // "YYYY-MM-DD"
-                    gdpGrowth: Number(values[idx]),
+                const covidSeries = covidJson[covidKey].map((row) => ({
+                    date: row.date, // YYYY-MM-DD
+                    confirmed: row.confirmed,
+                    deaths: row.deaths,
+                    recovered: row.recovered,
+                    newCases: row.confirmed, // placeholder, will adjust
                 }));
 
-                // ---- Join by date ----
-                const covidByDate = new Map(
-                    covidWithNew.map((p) => [p.date, p])
-                );
+                // Compute new cases per day
+                for (let i = 1; i < covidSeries.length; i++) {
+                    covidSeries[i].newCases =
+                        covidSeries[i].confirmed - covidSeries[i - 1].confirmed;
+                    if (covidSeries[i].newCases < 0)
+                        covidSeries[i].newCases = 0;
+                }
 
-                const combinedSeries = gdp
-                    .map((g) => {
-                        const covidPoint = covidByDate.get(g.date);
-                        if (!covidPoint) return null;
+                //
+                // 2. World Bank GDP growth (% annual) by ISO2 country code
+                //
+                const gdpUrl = `https://api.worldbank.org/v2/country/${countryKey}/indicator/NY.GDP.MKTP.KD.ZG?format=json`;
 
+                let gdpRes = await fetch(gdpUrl);
+                if (!gdpRes.ok) {
+                    // fallback: US data so charts still render
+                    gdpRes = await fetch(
+                        "https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.KD.ZG?format=json"
+                    );
+                }
+
+                const gdpJson = await gdpRes.json();
+
+                let gdpSeries = [];
+                if (Array.isArray(gdpJson) && gdpJson[1]) {
+                    gdpSeries = gdpJson[1]
+                        .filter((item) => item.value !== null)
+                        .map((item) => ({
+                            date: `${item.date}-01-01`, // convert year → date
+                            gdpGrowth: item.value, // annual GDP growth %
+                        }));
+                }
+
+                //
+                // 3. Join by year: match each COVID daily with GDP of its year
+                //
+                const combinedRows = covidSeries
+                    .map((covid) => {
+                        const year = covid.date.substring(0, 4);
+                        const gdpRow = gdpSeries.find((g) =>
+                            g.date.startsWith(year)
+                        );
+                        if (!gdpRow) return null;
                         return {
-                            date: g.date,
-                            gdpGrowth: g.gdpGrowth,
-                            confirmed: covidPoint.confirmed,
-                            newCases: covidPoint.newCases,
-                            deaths: covidPoint.deaths,
+                            date: covid.date,
+                            confirmed: covid.confirmed,
+                            deaths: covid.deaths,
+                            newCases: covid.newCases,
+                            gdpGrowth: gdpRow.gdpGrowth,
                         };
                     })
                     .filter(Boolean);
 
-                if (!cancelled) {
-                    setCovidDaily(covidWithNew);
-                    setGdpWeekly(gdp);
-                    setCombined(combinedSeries);
-                    setLoading(false);
-                }
+                setCovidDaily(covidSeries);
+                setGdpWeekly(gdpSeries);
+                setCombined(combinedRows);
+                setLoading(false);
             } catch (err) {
-                console.error(err);
-                if (!cancelled) {
-                    setError(err);
-                    setLoading(false);
-                }
+                setError(err);
+                setLoading(false);
             }
         }
 
-        load();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [covidKey]);
+        fetchData();
+    }, [countryKey, covidKey]); // re-run when ISO2 or mapped key changes
 
     return { loading, error, covidDaily, gdpWeekly, combined };
 }
