@@ -1,40 +1,60 @@
 import React from "react";
 
-export default function Home() {
+function Home() {
     return (
-        <section>
+        <section className="home">
             <h1>COVID-19 & Economic Activity Dashboard</h1>
-
-            <p className="mt-3">
-                This project explores the interaction between COVID-19 new cases
-                and economic activity (GDP growth), inspired by recent research
-                that models their co-evolution with Lotka–Volterra
-                (prey–predator) type dynamics.
+            <p>
+                This project explores how COVID-19 case counts and economic
+                activity (approximated by GDP growth) evolve over time in
+                different countries.
             </p>
 
-            <p className="mt-3">The dashboard will let you visualize:</p>
+            <p>The dashboard uses live data from two public APIs:</p>
 
-            <ul className="list-group list-group-flush mt-2">
-                <li className="list-group-item">
-                    Weekly COVID-19 new cases time series for a country.
+            <ul>
+                <li>
+                    Daily COVID-19 time series from{" "}
+                    <a
+                        href="https://pomber.github.io/covid19/timeseries.json"
+                        target="_blank"
+                        rel="noreferrer"
+                    >
+                        pomber&apos;s COVID dataset
+                    </a>
+                    .
                 </li>
-                <li className="list-group-item">
-                    Weekly GDP growth estimates over the same period.
-                </li>
-                <li className="list-group-item">
-                    Phase plots showing the relationship between pandemic
-                    intensity and economic activity.
-                </li>
-                <li className="list-group-item">
-                    (Coming soon) A Lotka–Volterra-style simulator for
-                    COVID–economy waves.
+                <li>
+                    Annual GDP growth (%), per country, from the{" "}
+                    <a
+                        href="https://api.worldbank.org/"
+                        target="_blank"
+                        rel="noreferrer"
+                    >
+                        World Bank API
+                    </a>
+                    .
                 </li>
             </ul>
 
-            <p className="mt-3">
-                Use the navigation bar to open the <strong>Dashboard</strong>{" "}
-                and explore the first visualizations.
+            <p>
+                Use the navigation bar above to open the{" "}
+                <strong>Dashboard</strong> view and interact with:
             </p>
+
+            <ul>
+                <li>Country selector cards.</li>
+                <li>
+                    Summary cards for peak cases, worst GDP year, and
+                    correlation.
+                </li>
+                <li>
+                    Time series of daily COVID cases with GDP growth attached.
+                </li>
+                <li>A scatter plot showing new cases versus GDP growth.</li>
+            </ul>
         </section>
     );
 }
+
+export default Home;

@@ -2,7 +2,6 @@
 import React, { useState } from "react";
 import { useCovidGdpApiData } from "../hooks/useCovidGdpApiData";
 
-// Chart.js + react-chartjs-2
 import {
     Chart as ChartJS,
     CategoryScale,
@@ -25,43 +24,39 @@ ChartJS.register(
     Title
 );
 
-// Countries we support (COVID key + label)
+// Countries we support – note: pomber uses country codes like "US", "Italy", etc.
+// World Bank uses ISO2 like "US", "DE", "IT", etc.
 const COUNTRY_OPTIONS = [
     { key: "US", label: "United States" },
-    { key: "Germany", label: "Germany" },
-    { key: "Italy", label: "Italy" },
-    { key: "Japan", label: "Japan" },
-    { key: "Canada", label: "Canada" },
-    { key: "France", label: "France" },
+    { key: "DE", label: "Germany" },
+    { key: "IT", label: "Italy" },
+    { key: "JP", label: "Japan" },
+    { key: "CA", label: "Canada" },
+    { key: "FR", label: "France" },
 ];
 
-// Helper: compute summary metrics from combined series
+// Compute basic summary stats
 function computeMetrics(combined) {
-    if (!combined || combined.length === 0) {
-        return null;
-    }
+    if (!combined || combined.length === 0) return null;
 
-    // Peak new cases
     let peakCases = combined[0].newCases;
     let peakCasesDate = combined[0].date;
+
+    let worstGdp = combined[0].gdpGrowth;
+    let worstGdpDate = combined[0].date;
+
     combined.forEach((row) => {
         if (row.newCases > peakCases) {
             peakCases = row.newCases;
             peakCasesDate = row.date;
         }
-    });
-
-    // Worst GDP (min value)
-    let worstGdp = combined[0].gdpGrowth;
-    let worstGdpDate = combined[0].date;
-    combined.forEach((row) => {
         if (row.gdpGrowth < worstGdp) {
             worstGdp = row.gdpGrowth;
             worstGdpDate = row.date;
         }
     });
 
-    // Correlation between newCases and gdpGrowth
+    // correlation between newCases and gdpGrowth
     let corr = null;
     if (combined.length > 1) {
         const xs = combined.map((r) => r.newCases);
@@ -74,6 +69,7 @@ function computeMetrics(combined) {
         let cov = 0;
         let varX = 0;
         let varY = 0;
+
         for (let i = 0; i < n; i++) {
             const dx = xs[i] - meanX;
             const dy = ys[i] - meanY;
@@ -84,18 +80,10 @@ function computeMetrics(combined) {
 
         if (varX > 0 && varY > 0) {
             corr = cov / Math.sqrt(varX * varY);
-        } else {
-            corr = null;
         }
     }
 
-    return {
-        peakCases,
-        peakCasesDate,
-        worstGdp,
-        worstGdpDate,
-        corr,
-    };
+    return { peakCases, peakCasesDate, worstGdp, worstGdpDate, corr };
 }
 
 function Dashboard() {
@@ -149,10 +137,7 @@ function Dashboard() {
         );
     }
 
-    // ----- Metrics -----
     const metrics = computeMetrics(combined);
-
-    // ----- Build chart datasets from combined -----
 
     const labels = combined.map((row) => row.date);
     const newCases = combined.map((row) => row.newCases);
@@ -169,7 +154,7 @@ function Dashboard() {
                 pointRadius: 0,
             },
             {
-                label: `Weekly GDP growth YoY (%) – ${selectedCountry.label}`,
+                label: `Annual GDP growth (%) – ${selectedCountry.label}`,
                 data: gdpGrowth,
                 yAxisID: "yGdp",
                 tension: 0.25,
@@ -190,7 +175,7 @@ function Dashboard() {
             },
             title: {
                 display: true,
-                text: `${selectedCountry.label}: COVID-19 new cases vs weekly GDP growth (API data)`,
+                text: `${selectedCountry.label}: COVID-19 new cases vs annual GDP growth`,
             },
         },
         scales: {
@@ -216,7 +201,7 @@ function Dashboard() {
                 position: "right",
                 title: {
                     display: true,
-                    text: "GDP growth YoY (%)",
+                    text: "Annual GDP growth (%)",
                 },
                 grid: {
                     drawOnChartArea: false,
@@ -228,7 +213,7 @@ function Dashboard() {
     const phaseData = {
         datasets: [
             {
-                label: "Weekly observations",
+                label: "Daily observations with annual GDP attached",
                 data: combined.map((row) => ({
                     x: row.gdpGrowth,
                     y: row.newCases,
@@ -246,7 +231,7 @@ function Dashboard() {
             },
             title: {
                 display: true,
-                text: `Phase plot: GDP growth vs new COVID-19 cases (${selectedCountry.label})`,
+                text: `Scatter plot: GDP growth vs new COVID-19 cases (${selectedCountry.label})`,
             },
             tooltip: {
                 callbacks: {
@@ -256,7 +241,7 @@ function Dashboard() {
                         return `Date: ${
                             row.date
                         } | New cases: ${row.newCases.toLocaleString()} | GDP: ${row.gdpGrowth.toFixed(
-                            3
+                            2
                         )}%`;
                     },
                 },
@@ -266,7 +251,7 @@ function Dashboard() {
             x: {
                 title: {
                     display: true,
-                    text: "Weekly GDP growth YoY (%)",
+                    text: "Annual GDP growth (%)",
                 },
             },
             y: {
@@ -302,18 +287,18 @@ function Dashboard() {
             </section>
 
             <section style={{ marginTop: "2.5rem", maxWidth: "800px" }}>
-                <h2>Phase plot: GDP vs COVID (Lotka–Volterra-style view)</h2>
+                <h2>Scatter: GDP growth vs COVID-19 cases</h2>
                 <Scatter data={phaseData} options={phaseOptions} />
                 <p style={{ marginTop: "0.75rem", fontSize: "0.9rem" }}>
-                    Each point is a week where we have both GDP growth and COVID
-                    new case data. In the paper you’re using, similar phase
-                    plots are used to argue that COVID–economy co-dynamics
-                    resemble a Lotka–Volterra prey–predator system.
+                    Each point attaches an annual GDP growth value to a daily
+                    new cases observation for this country. This gives a rough
+                    view of how economic performance and pandemic intensity move
+                    together over time.
                 </p>
             </section>
 
             <section style={{ marginTop: "2.5rem" }}>
-                <h2>Sample of joined data (first 30 weeks)</h2>
+                <h2>Sample of joined data (first 30 days with GDP attached)</h2>
                 <div style={{ overflowX: "auto" }}>
                     <table className="data-table">
                         <thead>
@@ -322,7 +307,7 @@ function Dashboard() {
                                 <th>New cases (daily)</th>
                                 <th>Cumulative cases</th>
                                 <th>Deaths (cumulative)</th>
-                                <th>GDP growth YoY (%)</th>
+                                <th>Annual GDP growth (%)</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -332,7 +317,7 @@ function Dashboard() {
                                     <td>{row.newCases.toLocaleString()}</td>
                                     <td>{row.confirmed.toLocaleString()}</td>
                                     <td>{row.deaths.toLocaleString()}</td>
-                                    <td>{row.gdpGrowth.toFixed(3)}</td>
+                                    <td>{row.gdpGrowth.toFixed(2)}</td>
                                 </tr>
                             ))}
                         </tbody>
@@ -343,7 +328,6 @@ function Dashboard() {
     );
 }
 
-// Header separated just for cleanliness
 function Header() {
     return (
         <header>
@@ -359,11 +343,11 @@ function Header() {
                 </a>{" "}
                 and{" "}
                 <a
-                    href="https://db.nomics.world/OECD/GDP_GROWTH"
+                    href="https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.KD.ZG?format=json"
                     target="_blank"
                     rel="noreferrer"
                 >
-                    OECD Weekly GDP Tracker via DB.nomics
+                    World Bank GDP growth API
                 </a>
                 .
             </p>
@@ -371,7 +355,6 @@ function Header() {
     );
 }
 
-// Card-based country selector
 function CountryCards({ selectedKey, onSelect }) {
     return (
         <section style={{ marginTop: "1.5rem" }}>
@@ -430,7 +413,6 @@ function CountryCards({ selectedKey, onSelect }) {
     );
 }
 
-// Summary metrics cards
 function SummaryCards({
     countryName,
     metrics,
@@ -446,6 +428,15 @@ function SummaryCards({
             ? "N/A"
             : corr.toFixed(2) + (corr > 0 ? " (positive)" : " (negative)");
 
+    const cardStyle = {
+        flex: "1 1 220px",
+        padding: "1rem",
+        borderRadius: "0.75rem",
+        border: "1px solid #e0e0e0",
+        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+        backgroundColor: "#fff",
+    };
+
     return (
         <section style={{ marginTop: "1.75rem" }}>
             <h2>Summary metrics ({countryName})</h2>
@@ -457,17 +448,7 @@ function SummaryCards({
                     marginTop: "0.75rem",
                 }}
             >
-                {/* Peak cases */}
-                <div
-                    style={{
-                        flex: "1 1 220px",
-                        padding: "1rem",
-                        borderRadius: "0.75rem",
-                        border: "1px solid #e0e0e0",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-                        backgroundColor: "#fff",
-                    }}
-                >
+                <div style={cardStyle}>
                     <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
                         Peak new cases
                     </div>
@@ -489,25 +470,15 @@ function SummaryCards({
                     </div>
                 </div>
 
-                {/* Worst GDP */}
-                <div
-                    style={{
-                        flex: "1 1 220px",
-                        padding: "1rem",
-                        borderRadius: "0.75rem",
-                        border: "1px solid #e0e0e0",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-                        backgroundColor: "#fff",
-                    }}
-                >
+                <div style={cardStyle}>
                     <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
-                        Worst GDP week
+                        Worst GDP year
                     </div>
                     <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
                         {worstGdp.toFixed(2)}%
                     </div>
                     <div style={{ fontSize: "0.85rem", marginTop: "0.25rem" }}>
-                        on <strong>{worstGdpDate}</strong>
+                        in <strong>{worstGdpDate.substring(0, 4)}</strong>
                     </div>
                     <div
                         style={{
@@ -516,22 +487,12 @@ function SummaryCards({
                             opacity: 0.7,
                         }}
                     >
-                        Based on OECD Weekly Tracker ({totalGdpRecords} weekly
-                        observations).
+                        Based on World Bank annual GDP growth data (
+                        {totalGdpRecords} records).
                     </div>
                 </div>
 
-                {/* Correlation */}
-                <div
-                    style={{
-                        flex: "1 1 220px",
-                        padding: "1rem",
-                        borderRadius: "0.75rem",
-                        border: "1px solid #e0e0e0",
-                        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-                        backgroundColor: "#fff",
-                    }}
-                >
+                <div style={cardStyle}>
                     <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
                         Cases–GDP correlation
                     </div>
@@ -545,7 +506,7 @@ function SummaryCards({
                             opacity: 0.7,
                         }}
                     >
-                        Pearson correlation between daily new cases and weekly
+                        Pearson correlation between daily new cases and annual
                         GDP growth on the joined series.
                     </div>
                 </div>
