@@ -1,7 +1,6 @@
 // src/pages/Dashboard.js
-import React, { useState } from "react";
-import { useCovidGdpApiData } from "../hooks/useCovidGdpApiData";
-
+import React, { useState, useMemo } from "react";
+import { Line } from "react-chartjs-2";
 import {
     Chart as ChartJS,
     CategoryScale,
@@ -12,8 +11,9 @@ import {
     Legend,
     Title,
 } from "chart.js";
-import { Line, Scatter } from "react-chartjs-2";
+import { useCovidGdpApiData } from "../hooks/useCovidGdpApiData";
 
+// Register Chart.js components
 ChartJS.register(
     CategoryScale,
     LinearScale,
@@ -24,495 +24,537 @@ ChartJS.register(
     Title
 );
 
-// Countries we support – note: pomber uses country codes like "US", "Italy", etc.
-// World Bank uses ISO2 like "US", "DE", "IT", etc.
-const COUNTRY_OPTIONS = [
+const COUNTRY_CONFIG = [
     { key: "US", label: "United States" },
     { key: "DE", label: "Germany" },
     { key: "IT", label: "Italy" },
     { key: "JP", label: "Japan" },
     { key: "CA", label: "Canada" },
     { key: "FR", label: "France" },
+    { key: "SE", label: "Sweden" },
+    { key: "MX", label: "Mexico" },
+    { key: "NZ", label: "New Zealand" },
+    { key: "TH", label: "Thailand" },
 ];
 
-// Compute basic summary stats
-function computeMetrics(combined) {
-    if (!combined || combined.length === 0) return null;
-
-    let peakCases = combined[0].newCases;
-    let peakCasesDate = combined[0].date;
-
-    let worstGdp = combined[0].gdpGrowth;
-    let worstGdpDate = combined[0].date;
-
-    combined.forEach((row) => {
-        if (row.newCases > peakCases) {
-            peakCases = row.newCases;
-            peakCasesDate = row.date;
-        }
-        if (row.gdpGrowth < worstGdp) {
-            worstGdp = row.gdpGrowth;
-            worstGdpDate = row.date;
-        }
-    });
-
-    // correlation between newCases and gdpGrowth
-    let corr = null;
-    if (combined.length > 1) {
-        const xs = combined.map((r) => r.newCases);
-        const ys = combined.map((r) => r.gdpGrowth);
-
-        const n = xs.length;
-        const meanX = xs.reduce((s, v) => s + v, 0) / n;
-        const meanY = ys.reduce((s, v) => s + v, 0) / n;
-
-        let cov = 0;
-        let varX = 0;
-        let varY = 0;
-
-        for (let i = 0; i < n; i++) {
-            const dx = xs[i] - meanX;
-            const dy = ys[i] - meanY;
-            cov += dx * dy;
-            varX += dx * dx;
-            varY += dy * dy;
-        }
-
-        if (varX > 0 && varY > 0) {
-            corr = cov / Math.sqrt(varX * varY);
-        }
-    }
-
-    return { peakCases, peakCasesDate, worstGdp, worstGdpDate, corr };
+function formatNumber(n) {
+    if (n == null) return "—";
+    if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+    if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(1) + "K";
+    return n.toLocaleString();
 }
 
 function Dashboard() {
-    const [selectedCountryKey, setSelectedCountryKey] = useState("US");
+    const [selectedCountry, setSelectedCountry] = useState("US");
+    const [covidSource, setCovidSource] = useState("who"); // "who" | "te"
 
-    const selectedCountry =
-        COUNTRY_OPTIONS.find((c) => c.key === selectedCountryKey) ||
-        COUNTRY_OPTIONS[0];
+    const { loading, error, combined, covidDaily } = useCovidGdpApiData(
+        selectedCountry,
+        covidSource
+    );
 
-    const { loading, error, combined, covidDaily, gdpWeekly } =
-        useCovidGdpApiData(selectedCountryKey);
+    const latest = useMemo(() => {
+        if (!covidDaily || covidDaily.length === 0) return null;
+        return covidDaily[covidDaily.length - 1];
+    }, [covidDaily]);
 
-    if (loading) {
-        return (
-            <main className="page dashboard">
-                <Header />
-                <CountryCards
-                    selectedKey={selectedCountryKey}
-                    onSelect={setSelectedCountryKey}
-                />
-                <p>Loading live data from APIs…</p>
-            </main>
-        );
-    }
+    const latestGdp = useMemo(() => {
+        if (!combined || combined.length === 0) return null;
+        const lastWithGdp = [...combined]
+            .reverse()
+            .find((d) => d.gdpGrowth != null);
+        return lastWithGdp || null;
+    }, [combined]);
 
-    if (error) {
-        return (
-            <main className="page dashboard">
-                <Header />
-                <CountryCards
-                    selectedKey={selectedCountryKey}
-                    onSelect={setSelectedCountryKey}
-                />
-                <p style={{ color: "red" }}>
-                    Error loading data: {error.message}
-                </p>
-            </main>
-        );
-    }
+    const covidSourceLabel =
+        covidSource === "who"
+            ? "WHO / Pomber timeseries"
+            : "TradingEconomics (fallback to WHO)";
 
-    if (!combined || combined.length === 0) {
-        return (
-            <main className="page dashboard">
-                <Header />
-                <CountryCards
-                    selectedKey={selectedCountryKey}
-                    onSelect={setSelectedCountryKey}
-                />
-                <p>No joined COVID + GDP data available for this country.</p>
-            </main>
-        );
-    }
+    // Prepare chart data
+    const labels = combined ? combined.map((d) => d.date) : [];
 
-    const metrics = computeMetrics(combined);
-
-    const labels = combined.map((row) => row.date);
-    const newCases = combined.map((row) => row.newCases);
-    const gdpGrowth = combined.map((row) => row.gdpGrowth);
-
-    const timeSeriesData = {
+    const chartData = {
         labels,
         datasets: [
             {
-                label: `New COVID-19 cases (daily, ${selectedCountry.label})`,
-                data: newCases,
+                label: "New cases",
+                data: combined ? combined.map((d) => d.newCases) : [],
+                borderColor: "#1976d2",
+                backgroundColor: "rgba(25, 118, 210, 0.15)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.25,
                 yAxisID: "yCases",
-                tension: 0.25,
-                pointRadius: 0,
             },
             {
-                label: `Annual GDP growth (%) – ${selectedCountry.label}`,
-                data: gdpGrowth,
+                label: "New deaths",
+                data: combined ? combined.map((d) => d.newDeaths || 0) : [],
+                borderColor: "#d32f2f",
+                backgroundColor: "rgba(211, 47, 47, 0.15)",
+                borderWidth: 1,
+                pointRadius: 0,
+                tension: 0.25,
+                yAxisID: "yCases",
+            },
+            {
+                label: "GDP growth (%)",
+                data: combined ? combined.map((d) => d.gdpGrowth) : [],
+                borderColor: "#388e3c",
+                backgroundColor: "rgba(56, 142, 60, 0.15)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.25,
                 yAxisID: "yGdp",
-                tension: 0.25,
-                pointRadius: 0,
             },
         ],
     };
 
-    const timeSeriesOptions = {
+    const chartOptions = {
         responsive: true,
-        interaction: {
-            mode: "index",
-            intersect: false,
-        },
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
         plugins: {
             legend: {
                 position: "top",
+                labels: { font: { size: 11 } },
             },
             title: {
                 display: true,
-                text: `${selectedCountry.label}: COVID-19 new cases vs annual GDP growth`,
-            },
-        },
-        scales: {
-            x: {
-                title: {
-                    display: true,
-                    text: "Date",
-                },
-                ticks: {
-                    maxTicksLimit: 10,
-                },
-            },
-            yCases: {
-                type: "linear",
-                position: "left",
-                title: {
-                    display: true,
-                    text: "New cases (daily)",
-                },
-            },
-            yGdp: {
-                type: "linear",
-                position: "right",
-                title: {
-                    display: true,
-                    text: "Annual GDP growth (%)",
-                },
-                grid: {
-                    drawOnChartArea: false,
-                },
-            },
-        },
-    };
-
-    const phaseData = {
-        datasets: [
-            {
-                label: "Daily observations with annual GDP attached",
-                data: combined.map((row) => ({
-                    x: row.gdpGrowth,
-                    y: row.newCases,
-                })),
-                pointRadius: 3,
-            },
-        ],
-    };
-
-    const phaseOptions = {
-        responsive: true,
-        plugins: {
-            legend: {
-                position: "top",
-            },
-            title: {
-                display: true,
-                text: `Scatter plot: GDP growth vs new COVID-19 cases (${selectedCountry.label})`,
+                text: "COVID–GDP co-dynamics over time",
+                font: { size: 14 },
             },
             tooltip: {
                 callbacks: {
-                    label: (ctx) => {
-                        const idx = ctx.dataIndex;
-                        const row = combined[idx];
-                        return `Date: ${
-                            row.date
-                        } | New cases: ${row.newCases.toLocaleString()} | GDP: ${row.gdpGrowth.toFixed(
-                            2
-                        )}%`;
+                    label: function (ctx) {
+                        const label = ctx.dataset.label || "";
+                        const value = ctx.raw;
+                        if (label === "New cases") {
+                            return `${label}: ${formatNumber(value)}`;
+                        }
+                        if (label === "New deaths") {
+                            return `${label}: ${formatNumber(value)}`;
+                        }
+                        if (label === "GDP growth (%)") {
+                            if (value == null) return `${label}: —`;
+                            return `${label}: ${value.toFixed(2)}%`;
+                        }
+                        return `${label}: ${value}`;
                     },
                 },
             },
         },
         scales: {
             x: {
-                title: {
-                    display: true,
-                    text: "Annual GDP growth (%)",
+                ticks: {
+                    maxTicksLimit: 10,
+                    font: { size: 10 },
                 },
             },
-            y: {
-                title: {
-                    display: true,
-                    text: "New COVID-19 cases (daily)",
+            yCases: {
+                type: "linear",
+                position: "left",
+                title: { display: true, text: "New cases / deaths" },
+                ticks: {
+                    callback: (v) => formatNumber(v),
+                    font: { size: 10 },
+                },
+            },
+            yGdp: {
+                type: "linear",
+                position: "right",
+                title: { display: true, text: "GDP growth (%)" },
+                grid: { drawOnChartArea: false },
+                ticks: {
+                    callback: (v) => (v == null ? "" : `${v.toFixed(1)}%`),
+                    font: { size: 10 },
                 },
             },
         },
     };
 
-    const previewRows = combined.slice(0, 30);
-
     return (
-        <main className="page dashboard">
-            <Header />
-
-            <CountryCards
-                selectedKey={selectedCountryKey}
-                onSelect={setSelectedCountryKey}
-            />
-
-            <SummaryCards
-                countryName={selectedCountry.label}
-                metrics={metrics}
-                totalCovidRecords={covidDaily.length}
-                totalGdpRecords={gdpWeekly.length}
-            />
-
-            <section style={{ marginTop: "2rem", maxWidth: "1000px" }}>
-                <h2>Time series: COVID-19 new cases vs GDP growth</h2>
-                <Line data={timeSeriesData} options={timeSeriesOptions} />
-            </section>
-
-            <section style={{ marginTop: "2.5rem", maxWidth: "800px" }}>
-                <h2>Scatter: GDP growth vs COVID-19 cases</h2>
-                <Scatter data={phaseData} options={phaseOptions} />
-                <p style={{ marginTop: "0.75rem", fontSize: "0.9rem" }}>
-                    Each point attaches an annual GDP growth value to a daily
-                    new cases observation for this country. This gives a rough
-                    view of how economic performance and pandemic intensity move
-                    together over time.
-                </p>
-            </section>
-
-            <section style={{ marginTop: "2.5rem" }}>
-                <h2>Sample of joined data (first 30 days with GDP attached)</h2>
-                <div style={{ overflowX: "auto" }}>
-                    <table className="data-table">
-                        <thead>
-                            <tr>
-                                <th>Date</th>
-                                <th>New cases (daily)</th>
-                                <th>Cumulative cases</th>
-                                <th>Deaths (cumulative)</th>
-                                <th>Annual GDP growth (%)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {previewRows.map((row) => (
-                                <tr key={row.date}>
-                                    <td>{row.date}</td>
-                                    <td>{row.newCases.toLocaleString()}</td>
-                                    <td>{row.confirmed.toLocaleString()}</td>
-                                    <td>{row.deaths.toLocaleString()}</td>
-                                    <td>{row.gdpGrowth.toFixed(2)}</td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-        </main>
-    );
-}
-
-function Header() {
-    return (
-        <header>
-            <h1>COVID–19 vs Economic Activity</h1>
-            <p>
-                Live data from{" "}
-                <a
-                    href="https://pomber.github.io/covid19/timeseries.json"
-                    target="_blank"
-                    rel="noreferrer"
-                >
-                    pomber COVID-19 time series
-                </a>{" "}
-                and{" "}
-                <a
-                    href="https://api.worldbank.org/v2/country/US/indicator/NY.GDP.MKTP.KD.ZG?format=json"
-                    target="_blank"
-                    rel="noreferrer"
-                >
-                    World Bank GDP growth API
-                </a>
-                .
-            </p>
-        </header>
-    );
-}
-
-function CountryCards({ selectedKey, onSelect }) {
-    return (
-        <section style={{ marginTop: "1.5rem" }}>
-            <h2>Select country</h2>
-            <div
+        <div style={{ padding: "24px", maxWidth: 1200, margin: "0 auto" }}>
+            {/* Header */}
+            <header
                 style={{
+                    marginBottom: 24,
                     display: "flex",
                     flexWrap: "wrap",
-                    gap: "1rem",
-                    marginTop: "0.75rem",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 16,
                 }}
             >
-                {COUNTRY_OPTIONS.map((c) => {
-                    const isActive = c.key === selectedKey;
-                    return (
-                        <button
-                            key={c.key}
-                            type="button"
-                            onClick={() => onSelect(c.key)}
+                <div>
+                    <h1 style={{ margin: 0 }}>COVID–GDP Dashboard</h1>
+                    <p
+                        style={{
+                            margin: "4px 0",
+                            color: "#555",
+                            maxWidth: 520,
+                        }}
+                    >
+                        Exploring Lotka–Volterra-style co-dynamics between{" "}
+                        <strong>COVID-19 spread</strong> and{" "}
+                        <strong>economic activity (GDP growth)</strong> using
+                        real data.
+                    </p>
+                    <p style={{ margin: 0, fontSize: 12, color: "#777" }}>
+                        COVID source: {covidSourceLabel}
+                    </p>
+                </div>
+
+                {/* COVID Source Toggle */}
+                <div
+                    style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        background: "#f5f5f5",
+                        padding: "4px 8px",
+                        borderRadius: 999,
+                    }}
+                >
+                    <span style={{ fontSize: 12, color: "#555" }}>
+                        COVID data:
+                    </span>
+                    <button
+                        type="button"
+                        onClick={() => setCovidSource("who")}
+                        style={{
+                            borderRadius: 999,
+                            border: "none",
+                            padding: "6px 10px",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            background:
+                                covidSource === "who"
+                                    ? "#1976d2"
+                                    : "transparent",
+                            color: covidSource === "who" ? "white" : "#1976d2",
+                        }}
+                    >
+                        WHO
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setCovidSource("te")}
+                        style={{
+                            borderRadius: 999,
+                            border: "none",
+                            padding: "6px 10px",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            background:
+                                covidSource === "te"
+                                    ? "#1976d2"
+                                    : "transparent",
+                            color: covidSource === "te" ? "white" : "#1976d2",
+                        }}
+                    >
+                        TE
+                    </button>
+                </div>
+            </header>
+
+            {/* Country cards */}
+            <section style={{ marginBottom: 24 }}>
+                <h2 style={{ marginBottom: 8, fontSize: 18 }}>
+                    Select country
+                </h2>
+                <div
+                    style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                            "repeat(auto-fit, minmax(120px, 1fr))",
+                        gap: 12,
+                    }}
+                >
+                    {COUNTRY_CONFIG.map((c) => {
+                        const active = c.key === selectedCountry;
+                        return (
+                            <button
+                                key={c.key}
+                                type="button"
+                                onClick={() => setSelectedCountry(c.key)}
+                                style={{
+                                    padding: "10px 12px",
+                                    textAlign: "left",
+                                    borderRadius: 12,
+                                    border: active
+                                        ? "2px solid #1976d2"
+                                        : "1px solid #ddd",
+                                    background: active ? "#e3f2fd" : "white",
+                                    cursor: "pointer",
+                                    fontSize: 14,
+                                }}
+                            >
+                                <div style={{ fontWeight: 600 }}>{c.label}</div>
+                                <div style={{ fontSize: 11, color: "#777" }}>
+                                    {c.key}
+                                </div>
+                            </button>
+                        );
+                    })}
+                </div>
+            </section>
+
+            {/* Loading / Error */}
+            {loading && <div style={{ marginTop: 24 }}>Loading data…</div>}
+            {error && !loading && (
+                <div style={{ marginTop: 24, color: "crimson" }}>
+                    Error loading data: {error.message}
+                </div>
+            )}
+
+            {/* Main content */}
+            {!loading && !error && (
+                <>
+                    {/* Summary cards */}
+                    <section
+                        style={{
+                            display: "grid",
+                            gridTemplateColumns:
+                                "repeat(auto-fit, minmax(180px, 1fr))",
+                            gap: 16,
+                            marginBottom: 24,
+                        }}
+                    >
+                        <div
                             style={{
-                                minWidth: "150px",
-                                padding: "0.75rem 1rem",
-                                borderRadius: "0.75rem",
-                                border: isActive
-                                    ? "2px solid #0d6efd"
-                                    : "1px solid #ccc",
-                                backgroundColor: isActive ? "#e7f1ff" : "#fff",
-                                boxShadow: isActive
-                                    ? "0 0 0 2px rgba(13,110,253,0.25)"
-                                    : "0 1px 3px rgba(0,0,0,0.08)",
-                                cursor: "pointer",
-                                textAlign: "left",
+                                background: "white",
+                                borderRadius: 12,
+                                padding: 16,
+                                border: "1px solid #eee",
                             }}
                         >
                             <div
                                 style={{
-                                    fontWeight: 600,
-                                    marginBottom: "0.25rem",
+                                    fontSize: 12,
+                                    color: "#777",
+                                    marginBottom: 4,
                                 }}
                             >
-                                {c.label}
+                                Latest new cases
+                            </div>
+                            <div style={{ fontSize: 22, fontWeight: 700 }}>
+                                {latest ? formatNumber(latest.newCases) : "—"}
                             </div>
                             <div
                                 style={{
-                                    fontSize: "0.8rem",
-                                    opacity: 0.8,
+                                    fontSize: 11,
+                                    color: "#999",
+                                    marginTop: 4,
                                 }}
                             >
-                                {isActive ? "Selected" : "Click to view"}
+                                Source:{" "}
+                                {covidSource === "who" ? "WHO / Pomber" : "TE"}
                             </div>
-                        </button>
-                    );
-                })}
-            </div>
-        </section>
+                        </div>
+
+                        <div
+                            style={{
+                                background: "white",
+                                borderRadius: 12,
+                                padding: 16,
+                                border: "1px solid #eee",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    fontSize: 12,
+                                    color: "#777",
+                                    marginBottom: 4,
+                                }}
+                            >
+                                Total confirmed
+                            </div>
+                            <div style={{ fontSize: 22, fontWeight: 700 }}>
+                                {latest ? formatNumber(latest.confirmed) : "—"}
+                            </div>
+                        </div>
+
+                        <div
+                            style={{
+                                background: "white",
+                                borderRadius: 12,
+                                padding: 16,
+                                border: "1px solid #eee",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    fontSize: 12,
+                                    color: "#777",
+                                    marginBottom: 4,
+                                }}
+                            >
+                                Total deaths
+                            </div>
+                            <div style={{ fontSize: 22, fontWeight: 700 }}>
+                                {latest && latest.deaths != null
+                                    ? formatNumber(latest.deaths)
+                                    : "—"}
+                            </div>
+                        </div>
+
+                        <div
+                            style={{
+                                background: "white",
+                                borderRadius: 12,
+                                padding: 16,
+                                border: "1px solid #eee",
+                            }}
+                        >
+                            <div
+                                style={{
+                                    fontSize: 12,
+                                    color: "#777",
+                                    marginBottom: 4,
+                                }}
+                            >
+                                Latest GDP growth
+                            </div>
+                            <div style={{ fontSize: 22, fontWeight: 700 }}>
+                                {latestGdp && latestGdp.gdpGrowth != null
+                                    ? `${latestGdp.gdpGrowth.toFixed(1)}%`
+                                    : "—"}
+                            </div>
+                            <div
+                                style={{
+                                    fontSize: 11,
+                                    color: "#999",
+                                    marginTop: 4,
+                                }}
+                            >
+                                GDP: World Bank + TradingEconomics (token)
+                            </div>
+                        </div>
+                    </section>
+
+                    {/* Time-series chart */}
+                    <section
+                        style={{
+                            background: "white",
+                            borderRadius: 12,
+                            padding: 16,
+                            border: "1px solid #eee",
+                            marginBottom: 24,
+                        }}
+                    >
+                        <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>
+                            COVID vs GDP over time
+                        </h2>
+                        <p
+                            style={{
+                                margin: "0 0 12px",
+                                fontSize: 12,
+                                color: "#777",
+                            }}
+                        >
+                            Left axis: new COVID cases and deaths per day. Right
+                            axis: GDP growth (%). Peaks in GDP often precede
+                            peaks in cases, echoing the predator–prey intuition
+                            from Lotka–Volterra models.
+                        </p>
+                        <div style={{ width: "100%", height: 380 }}>
+                            <Line data={chartData} options={chartOptions} />
+                        </div>
+                    </section>
+
+                    {/* Optional raw data preview */}
+                    <section style={{ marginBottom: 24 }}>
+                        <h2 style={{ fontSize: 18, marginBottom: 8 }}>
+                            Sample of joined data
+                        </h2>
+                        <div
+                            style={{
+                                maxHeight: 260,
+                                overflow: "auto",
+                                borderRadius: 8,
+                                border: "1px solid #eee",
+                                background: "white",
+                            }}
+                        >
+                            <table
+                                style={{
+                                    width: "100%",
+                                    borderCollapse: "collapse",
+                                    fontSize: 12,
+                                }}
+                            >
+                                <thead>
+                                    <tr
+                                        style={{
+                                            background: "#fafafa",
+                                            position: "sticky",
+                                            top: 0,
+                                        }}
+                                    >
+                                        <th style={thCell}>Date</th>
+                                        <th style={thCell}>New cases</th>
+                                        <th style={thCell}>New deaths</th>
+                                        <th style={thCell}>Confirmed</th>
+                                        <th style={thCell}>Deaths</th>
+                                        <th style={thCell}>GDP growth (%)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {(combined || []).slice(-50).map((row) => (
+                                        <tr key={row.date}>
+                                            <td style={tdCell}>{row.date}</td>
+                                            <td style={tdCell}>
+                                                {formatNumber(row.newCases)}
+                                            </td>
+                                            <td style={tdCell}>
+                                                {row.newDeaths != null
+                                                    ? formatNumber(
+                                                          row.newDeaths
+                                                      )
+                                                    : "—"}
+                                            </td>
+                                            <td style={tdCell}>
+                                                {row.confirmed != null
+                                                    ? formatNumber(
+                                                          row.confirmed
+                                                      )
+                                                    : "—"}
+                                            </td>
+                                            <td style={tdCell}>
+                                                {row.deaths != null
+                                                    ? formatNumber(row.deaths)
+                                                    : "—"}
+                                            </td>
+                                            <td style={tdCell}>
+                                                {row.gdpGrowth != null
+                                                    ? row.gdpGrowth.toFixed(2)
+                                                    : "—"}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </>
+            )}
+        </div>
     );
 }
 
-function SummaryCards({
-    countryName,
-    metrics,
-    totalCovidRecords,
-    totalGdpRecords,
-}) {
-    if (!metrics) return null;
+const thCell = {
+    padding: "6px 8px",
+    textAlign: "left",
+    borderBottom: "1px solid #eee",
+    position: "sticky",
+    top: 0,
+};
 
-    const { peakCases, peakCasesDate, worstGdp, worstGdpDate, corr } = metrics;
-
-    const corrDisplay =
-        corr == null
-            ? "N/A"
-            : corr.toFixed(2) + (corr > 0 ? " (positive)" : " (negative)");
-
-    const cardStyle = {
-        flex: "1 1 220px",
-        padding: "1rem",
-        borderRadius: "0.75rem",
-        border: "1px solid #e0e0e0",
-        boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
-        backgroundColor: "#fff",
-    };
-
-    return (
-        <section style={{ marginTop: "1.75rem" }}>
-            <h2>Summary metrics ({countryName})</h2>
-            <div
-                style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "1rem",
-                    marginTop: "0.75rem",
-                }}
-            >
-                <div style={cardStyle}>
-                    <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
-                        Peak new cases
-                    </div>
-                    <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
-                        {peakCases.toLocaleString()}
-                    </div>
-                    <div style={{ fontSize: "0.85rem", marginTop: "0.25rem" }}>
-                        on <strong>{peakCasesDate}</strong>
-                    </div>
-                    <div
-                        style={{
-                            fontSize: "0.75rem",
-                            marginTop: "0.5rem",
-                            opacity: 0.7,
-                        }}
-                    >
-                        Based on joined COVID–GDP series ({totalCovidRecords}{" "}
-                        daily records).
-                    </div>
-                </div>
-
-                <div style={cardStyle}>
-                    <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
-                        Worst GDP year
-                    </div>
-                    <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
-                        {worstGdp.toFixed(2)}%
-                    </div>
-                    <div style={{ fontSize: "0.85rem", marginTop: "0.25rem" }}>
-                        in <strong>{worstGdpDate.substring(0, 4)}</strong>
-                    </div>
-                    <div
-                        style={{
-                            fontSize: "0.75rem",
-                            marginTop: "0.5rem",
-                            opacity: 0.7,
-                        }}
-                    >
-                        Based on World Bank annual GDP growth data (
-                        {totalGdpRecords} records).
-                    </div>
-                </div>
-
-                <div style={cardStyle}>
-                    <div style={{ fontSize: "0.8rem", opacity: 0.7 }}>
-                        Cases–GDP correlation
-                    </div>
-                    <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
-                        {corrDisplay}
-                    </div>
-                    <div
-                        style={{
-                            fontSize: "0.75rem",
-                            marginTop: "0.5rem",
-                            opacity: 0.7,
-                        }}
-                    >
-                        Pearson correlation between daily new cases and annual
-                        GDP growth on the joined series.
-                    </div>
-                </div>
-            </div>
-        </section>
-    );
-}
+const tdCell = {
+    padding: "6px 8px",
+    textAlign: "left",
+    borderBottom: "1px solid #f3f3f3",
+};
 
 export default Dashboard;
