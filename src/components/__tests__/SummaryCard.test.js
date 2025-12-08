@@ -1,6 +1,6 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
 import SummaryCard from "../SummaryCard";
+import { render, screen } from "@testing-library/react";
 
 const mockTheme = {
     background: "#f5f5f5",

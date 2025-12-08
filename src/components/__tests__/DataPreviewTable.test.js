@@ -1,4 +1,3 @@
-// src/components/__tests__/DataPreviewTable.test.js
 import React from "react";
 import { render, screen, within } from "@testing-library/react";
 import DataPreviewTable from "../DataPreviewTable";
@@ -75,8 +74,7 @@ describe("DataPreviewTable", () => {
         // Check that the row has the date
         expect(within(row).getByText(/2020-01-01/)).toBeInTheDocument();
 
-        // Use a unique value in that row — GDP "1.20"
-        // (Your component formats 1.2 => "1.20")
+        // Use a unique value in that row — GDP "1.20 (1.2 is formatted as 1.20)"
         expect(within(row).getByText("1.20")).toBeInTheDocument();
     });
 });

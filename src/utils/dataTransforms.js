@@ -1,12 +1,10 @@
-// src/utils/dataTransforms.js
-
 // Simple rolling average (e.g. 7-day for cases)
 export function rollingAverage(values, windowSize = 7) {
     if (!values) return [];
     const result = [];
     let sum = 0;
 
-    for (let i = 0; i < values.length; i++) {
+    for (let i = 0; i < values.length; ++i) {
         const v = values[i] ?? 0;
         sum += v;
 
@@ -25,7 +23,7 @@ export function rollingAverage(values, windowSize = 7) {
     return result;
 }
 
-// Short-term trend (up / down / flat), like a stock
+// Short-term trend (up / down / flat)
 export function computeTrend(series, window = 7) {
     if (!series || series.length < 2) return null;
     const n = series.length;
@@ -34,7 +32,7 @@ export function computeTrend(series, window = 7) {
     let first = null;
     let last = null;
 
-    for (let i = start; i < n; i++) {
+    for (let i = start; i < n; ++i) {
         const v = series[i];
         if (v == null || Number.isNaN(v)) continue;
         if (first === null) first = v;

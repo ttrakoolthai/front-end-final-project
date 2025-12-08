@@ -1,21 +1,6 @@
 import React from "react";
 import { formatNumber } from "../utils/formatters";
 
-/**
- * DataPreviewTable
- *
- * Props:
- * - theme: color palette object
- * - combined: array of rows like
- *   {
- *     date: string,
- *     newCases: number | null,
- *     confirmed: number | null,
- *     deaths: number | null,
- *     gdpGrowth: number | null
- *   }
- * - title?: string
- */
 function DataPreviewTable({ theme, combined, title }) {
     if (!combined || combined.length === 0) {
         return null;
@@ -81,9 +66,8 @@ function DataPreviewTable({ theme, combined, title }) {
             </div>
 
             <p className="section-subtitle">
-                Joined dataset used for the chart above. This combines COVID-19
-                daily stats and GDP growth for the selected country on a shared
-                date axis.
+                Joined dataset used for the chart above, combining COVID-19
+                daily stats and GDP growth for the selected country.
             </p>
 
             <div className="data-table-wrapper">

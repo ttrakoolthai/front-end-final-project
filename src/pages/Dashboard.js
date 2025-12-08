@@ -1,4 +1,3 @@
-// src/pages/Dashboard.js
 import React, { useState, useMemo } from "react";
 import { Line } from "react-chartjs-2";
 import {
@@ -14,7 +13,6 @@ import {
 import { useCovidGdpApiData } from "../hooks/useCovidGdpApiData";
 import SummaryCard from "../components/SummaryCard";
 import DataPreviewTable from "../components/DataPreviewTable";
-import InfoModal from "../components/InfoModal";
 import { formatNumber } from "../utils/formatters";
 import { rollingAverage, computeTrend } from "../utils/dataTransforms";
 
@@ -45,7 +43,7 @@ const lightTheme = {
     background: "#f5f5f5",
     textPrimary: "#111",
     textSecondary: "#555",
-    textMuted: "#555", // darker for contrast
+    textMuted: "#555",
     cardBg: "#ffffff",
     border: "#e0e0e0",
 };
@@ -68,7 +66,6 @@ function Dashboard() {
     const [viewMode, setViewMode] = useState("single"); // "single" | "compare"
     const [showRolling, setShowRolling] = useState(false);
     const [dateRange, setDateRange] = useState("max"); // "30d" | "90d" | "1y" | "max"
-    const [isInfoOpen, setIsInfoOpen] = useState(false);
 
     const theme = lightTheme;
 
@@ -399,20 +396,9 @@ function Dashboard() {
                             fontSize: 14,
                         }}
                     >
-                        Visualizing how{" "}
-                        <strong>COVID-19 cases and deaths</strong> relate to{" "}
+                        Visualizing how <strong>COVID-19</strong> affects{" "}
                         <strong>economic activity (GDP growth)</strong> across
-                        countries, using public datasets and a token-protected
-                        GDP API.
-                    </p>
-                    <p
-                        style={{
-                            margin: 0,
-                            fontSize: 13,
-                            color: theme.textMuted, // was #777, now darker
-                        }}
-                    >
-                        COVID source: {covidSourceLabel}
+                        various countries.
                     </p>
                 </div>
 
@@ -426,7 +412,7 @@ function Dashboard() {
                 >
                     {/* COVID Source Toggle */}
                     <div className="pill-toggle" aria-label="COVID data source">
-                        <span className="pill-toggle-label">COVID data:</span>
+                        <span className="pill-toggle-label">Data Source:</span>
                         <button
                             type="button"
                             onClick={() => setCovidSource("who")}
@@ -442,14 +428,6 @@ function Dashboard() {
                             TE
                         </button>
                     </div>
-
-                    <button
-                        type="button"
-                        className="icon-button"
-                        onClick={() => setIsInfoOpen(true)}
-                    >
-                        ⓘ About this dashboard
-                    </button>
                 </div>
             </header>
 
@@ -653,13 +631,8 @@ function Dashboard() {
                     {/* Time-series chart */}
                     <section className="chart-card section">
                         <h2 className="section-title">
-                            COVID vs GDP over time
+                            COVID vs GDP Over Time
                         </h2>
-                        <p className="section-subtitle">
-                            Left axis: new COVID cases per day. Right axis: GDP
-                            growth (%). Use the date range filter above to zoom
-                            in on recent periods, similar to stock dashboards.
-                        </p>
                         <figure aria-label="Line chart showing COVID cases and GDP growth over time for the selected country.">
                             <div className="chart-container">
                                 <Line
@@ -684,7 +657,7 @@ function Dashboard() {
                     <DataPreviewTable
                         theme={theme}
                         combined={combinedAFiltered}
-                        title="Sample of joined data"
+                        title="COVID-GDP Data"
                     />
                 </>
             )}
@@ -744,9 +717,7 @@ function Dashboard() {
                         </h2>
                         <p className="section-subtitle">
                             Compare daily new cases and GDP growth between two
-                            countries. Differences in policy, timing, and
-                            vaccine rollout often show up as different shapes in
-                            these curves.
+                            countries.
                         </p>
                         <figure aria-label="Line chart comparing COVID cases and GDP growth between two countries.">
                             <div className="chart-container">
@@ -783,14 +754,7 @@ function Dashboard() {
                     Data sources: WHO, World Bank, TradingEconomics
                     (token-protected GDP API).
                 </div>
-                <div>
-                    Built for CS564 Front-End Final Project &mdash;{" "}
-                    {new Date().getFullYear()}
-                </div>
             </footer>
-
-            {/* Info modal */}
-            <InfoModal open={isInfoOpen} onClose={() => setIsInfoOpen(false)} />
         </main>
     );
 }
