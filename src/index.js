@@ -1,10 +1,11 @@
+import App from "./App";
 import React from "react";
 import ReactDOM from "react-dom/client";
-import App from "./App";
+
 import "./styles.css";
 
 if (process.env.NODE_ENV === "development") {
-    // Lazy-load axe only in dev
+    // Accessibilty testing tool
     import("@axe-core/react").then((axe) => {
         const ReactDOMLib = require("react-dom");
         axe.default(React, ReactDOMLib, 1000);

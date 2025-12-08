@@ -1,4 +1,3 @@
-// src/hooks/useCovidGdpApiData.js
 import { useEffect, useState } from "react";
 
 // Dashboard key → pomber COVID label

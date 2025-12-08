@@ -1,16 +1,5 @@
 import React from "react";
 
-/**
- * SummaryCard
- *
- * Props:
- * - theme: color palette object
- * - title: string
- * - value: string | number
- * - subtitle?: string
- * - trend?: "up" | "down" | "flat" | { direction: "up"|"down"|"flat", delta?: number }
- * - trendLabel?: string (e.g. "7-day trend")
- */
 function SummaryCard({ theme, title, value, subtitle, trend, trendLabel }) {
     // Allow both a plain string ("up") and an object ({ direction, delta })
     const direction =
