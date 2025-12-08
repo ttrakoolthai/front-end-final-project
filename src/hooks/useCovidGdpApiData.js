@@ -1,7 +1,7 @@
 // src/hooks/useCovidGdpApiData.js
 import { useEffect, useState } from "react";
 
-// Map dashboard key → pomber COVID label
+// Dashboard key → pomber COVID label
 const COVID_COUNTRY_MAP = {
     US: "US",
     DE: "Germany",
@@ -15,8 +15,7 @@ const COVID_COUNTRY_MAP = {
     TH: "Thailand",
 };
 
-// Which GDP source to prefer for each country
-// (we now *prefer* TE for these 4 but will fall back to WB)
+// Preferred GDP source per country
 const GDP_SOURCE = {
     US: "worldbank",
     DE: "worldbank",
@@ -24,14 +23,13 @@ const GDP_SOURCE = {
     JP: "worldbank",
     CA: "worldbank",
     FR: "worldbank",
-
     SE: "tradingeconomics",
     MX: "tradingeconomics",
     NZ: "tradingeconomics",
     TH: "tradingeconomics",
 };
 
-// World Bank country codes (ISO3)
+// World Bank: ISO3 country codes
 const WB_COUNTRY_MAP = {
     US: "USA",
     DE: "DEU",
@@ -45,7 +43,7 @@ const WB_COUNTRY_MAP = {
     TH: "THA",
 };
 
-// TradingEconomics country names (for the URL)
+// TradingEconomics: country names for GDP
 const TE_COUNTRY_MAP = {
     SE: "sweden",
     MX: "mexico",
@@ -53,8 +51,22 @@ const TE_COUNTRY_MAP = {
     TH: "thailand",
 };
 
-// Helper: compute growth % series from value series (for TE level data)
-function computeGrowthSeries(values) {
+// TradingEconomics: country names for COVID endpoint
+const TE_COVID_COUNTRY_MAP = {
+    US: "united states",
+    DE: "germany",
+    IT: "italy",
+    JP: "japan",
+    CA: "canada",
+    FR: "france",
+    SE: "sweden",
+    MX: "mexico",
+    NZ: "new zealand",
+    TH: "thailand",
+};
+
+// Turn level series → growth% series (for TE GDP)
+function computeGrowthFromLevels(values) {
     return values.map((point, idx, arr) => {
         if (idx === 0) {
             return { ...point, growth: null };
@@ -68,41 +80,173 @@ function computeGrowthSeries(values) {
     });
 }
 
+// World Bank GDP growth (annual %)
 async function fetchWorldBankGdp(wbCode) {
-    // World Bank GDP growth (annual %)
-    const wbUrl = `https://api.worldbank.org/v2/country/${wbCode}/indicator/NY.GDP.MKTP.KD.ZG?format=json&per_page=100`;
-    const wbRes = await fetch(wbUrl);
-    if (!wbRes.ok) {
-        const text = await wbRes.text();
+    const url = `https://api.worldbank.org/v2/country/${wbCode}/indicator/NY.GDP.MKTP.KD.ZG?format=json&per_page=100`;
+    const res = await fetch(url);
+    if (!res.ok) {
+        const text = await res.text();
         throw new Error(
-            `World Bank GDP request failed (${wbRes.status}): ${
+            `World Bank GDP request failed (${res.status}): ${
                 text || "no body"
             }`
         );
     }
 
-    const wbJson = await wbRes.json();
-    const dataArray =
-        Array.isArray(wbJson) && Array.isArray(wbJson[1]) ? wbJson[1] : [];
+    const json = await res.json();
+    const entries =
+        Array.isArray(json) && Array.isArray(json[1]) ? json[1] : [];
 
-    const gdpValues = dataArray
+    const values = entries
         .filter((row) => row.value != null && row.date)
         .map((row) => ({
-            // Convert year "2020" → "2020-12-31" to align with daily data
-            date: `${row.date}-12-31`,
+            date: `${row.date}-12-31`, // align year to a date
             value: Number(row.value),
-            growth: Number(row.value), // already in percent
+            growth: Number(row.value), // already in %
         }));
 
-    gdpValues.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    values.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    return values;
+}
 
-    return gdpValues;
+// TradingEconomics GDP (levels → we compute growth)
+async function fetchTradingEconomicsGdp(teCountry, apiKey, wbFallbackCode) {
+    if (!apiKey || !teCountry) {
+        return fetchWorldBankGdp(wbFallbackCode);
+    }
+
+    try {
+        const base = "https://api.tradingeconomics.com";
+        const url = `${base}/historical/country/${encodeURIComponent(
+            teCountry
+        )}/indicator/gdp?c=${encodeURIComponent(apiKey)}`;
+
+        const res = await fetch(url);
+        if (!res.ok) {
+            return fetchWorldBankGdp(wbFallbackCode);
+        }
+
+        const json = await res.json();
+        const raw = Array.isArray(json) ? json : [];
+
+        const values = raw
+            .filter((row) => row.Value != null)
+            .map((row) => ({
+                date: row.Date ? row.Date.substring(0, 10) : null,
+                value: Number(row.Value),
+            }))
+            .filter((row) => row.date != null);
+
+        if (values.length === 0) {
+            return fetchWorldBankGdp(wbFallbackCode);
+        }
+
+        values.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+        return computeGrowthFromLevels(values);
+    } catch {
+        return fetchWorldBankGdp(wbFallbackCode);
+    }
+}
+
+// WHO/pomber COVID daily data
+async function fetchWhoCovid(covidKey) {
+    const covidRes = await fetch(
+        "https://pomber.github.io/covid19/timeseries.json"
+    );
+    if (!covidRes.ok) {
+        throw new Error("COVID API request failed");
+    }
+    const covidJson = await covidRes.json();
+    const series = covidJson[covidKey];
+    if (!series) {
+        throw new Error(`No COVID data for country: ${covidKey}`);
+    }
+
+    return series.map((row, idx) => {
+        const prevConfirmed = idx > 0 ? series[idx - 1].confirmed : 0;
+        const prevDeaths = idx > 0 ? series[idx - 1].deaths : 0;
+        const newCases = row.confirmed - prevConfirmed;
+        const newDeaths = row.deaths - prevDeaths;
+        return {
+            date: row.date,
+            confirmed: row.confirmed,
+            deaths: row.deaths,
+            recovered: row.recovered,
+            newCases: newCases < 0 ? 0 : newCases,
+            newDeaths: newDeaths < 0 ? 0 : newDeaths,
+        };
+    });
+}
+
+// TradingEconomics COVID daily (falls back to WHO on problems)
+async function fetchTradingEconomicsCovid(countryKey, apiKey) {
+    const teCountry = TE_COVID_COUNTRY_MAP[countryKey];
+    if (!apiKey || !teCountry) {
+        throw new Error("Missing TradingEconomics COVID config");
+    }
+
+    const base = "https://api.tradingeconomics.com";
+    const url = `${base}/coronavirus/country/${encodeURIComponent(
+        teCountry
+    )}?c=${encodeURIComponent(apiKey)}`;
+
+    const res = await fetch(url);
+    if (!res.ok) {
+        throw new Error(`TradingEconomics COVID request failed: ${res.status}`);
+    }
+
+    const json = await res.json();
+    const rows = Array.isArray(json) ? json : [json];
+
+    const sorted = rows
+        .filter((r) => r.Date && (r.Confirmed != null || r.TotalCases != null))
+        .map((r) => ({
+            date: r.Date.substring(0, 10),
+            confirmed:
+                r.Confirmed != null
+                    ? Number(r.Confirmed)
+                    : Number(r.TotalCases),
+            deaths:
+                r.Deaths != null
+                    ? Number(r.Deaths)
+                    : r.TotalDeaths != null
+                    ? Number(r.TotalDeaths)
+                    : null,
+        }))
+        .filter((r) => r.date);
+
+    sorted.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+    if (sorted.length === 0) {
+        throw new Error("No usable TradingEconomics COVID rows");
+    }
+
+    // derive newCases / newDeaths from cumulative
+    return sorted.map((row, idx) => {
+        const prev = idx > 0 ? sorted[idx - 1] : { confirmed: 0, deaths: 0 };
+        const newCases = row.confirmed - prev.confirmed;
+        const newDeaths =
+            row.deaths != null && prev.deaths != null
+                ? row.deaths - prev.deaths
+                : null;
+        return {
+            date: row.date,
+            confirmed: row.confirmed,
+            deaths: row.deaths,
+            recovered: null,
+            newCases: newCases < 0 ? 0 : newCases,
+            newDeaths: newDeaths == null ? null : newDeaths < 0 ? 0 : newDeaths,
+        };
+    });
 }
 
 /**
- * Hook: fetch COVID daily data + GDP data (WB OR TE w/ fallback) and join by date
+ * Public hook: fetch COVID + GDP and join them by date.
+ *
+ * @param {string} countryKey - e.g. "US", "DE", "SE"
+ * @param {"who" | "te"} covidSource - preferred COVID data source
  */
-export function useCovidGdpApiData(countryKey) {
+export function useCovidGdpApiData(countryKey, covidSource = "who") {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
@@ -113,7 +257,7 @@ export function useCovidGdpApiData(countryKey) {
     const covidKey = COVID_COUNTRY_MAP[countryKey] || countryKey;
     const preferredSource = GDP_SOURCE[countryKey] || "worldbank";
     const wbCode = WB_COUNTRY_MAP[countryKey] || "USA";
-    const teCountry = TE_COUNTRY_MAP[countryKey];
+    const teGdpCountry = TE_COUNTRY_MAP[countryKey];
     const teApiKey = process.env.REACT_APP_TE_API_KEY;
 
     useEffect(() => {
@@ -122,125 +266,37 @@ export function useCovidGdpApiData(countryKey) {
             setError(null);
 
             try {
-                //
-                // 1. COVID daily data from pomber
-                //
-                const covidRes = await fetch(
-                    "https://pomber.github.io/covid19/timeseries.json"
-                );
-                if (!covidRes.ok) {
-                    throw new Error("COVID API request failed");
-                }
-                const covidJson = await covidRes.json();
-                const series = covidJson[covidKey];
-                if (!series) {
-                    throw new Error(`No COVID data for country: ${covidKey}`);
-                }
-
-                const covidWithNew = series.map((row, idx) => {
-                    const prevConfirmed =
-                        idx > 0 ? series[idx - 1].confirmed : 0;
-                    const newCases = row.confirmed - prevConfirmed;
-                    return {
-                        date: row.date,
-                        confirmed: row.confirmed,
-                        deaths: row.deaths,
-                        recovered: row.recovered,
-                        newCases: newCases < 0 ? 0 : newCases,
-                    };
-                });
-
-                //
-                // 2. GDP data: try preferred source; if TE fails or empty, fall back to WB
-                //
-                let gdpWithGrowth = [];
-
-                if (preferredSource === "tradingeconomics") {
-                    let teOk = false;
-
-                    if (!teApiKey) {
-                        console.warn(
-                            "Missing REACT_APP_TE_API_KEY; skipping TradingEconomics and using World Bank."
+                // 1. COVID: WHO vs TE (with fallback to WHO)
+                let covidSeries;
+                if (covidSource === "te") {
+                    try {
+                        covidSeries = await fetchTradingEconomicsCovid(
+                            countryKey,
+                            teApiKey
                         );
-                    } else if (!teCountry) {
-                        console.warn(
-                            `No TradingEconomics mapping for ${countryKey}; using World Bank.`
-                        );
-                    } else {
-                        try {
-                            const teBase = "https://api.tradingeconomics.com";
-                            const teUrl = `${teBase}/historical/country/${encodeURIComponent(
-                                teCountry
-                            )}/indicator/gdp?c=${encodeURIComponent(teApiKey)}`;
-
-                            const gdpRes = await fetch(teUrl);
-                            if (!gdpRes.ok) {
-                                const text = await gdpRes.text();
-                                console.warn(
-                                    `TradingEconomics GDP request failed (${
-                                        gdpRes.status
-                                    }): ${text || "no body"}`
-                                );
-                            } else {
-                                const teData = await gdpRes.json();
-                                const gdpRaw = Array.isArray(teData)
-                                    ? teData
-                                    : [];
-
-                                const gdpValues = gdpRaw
-                                    .filter((row) => row.Value != null)
-                                    .map((row) => ({
-                                        date: row.Date
-                                            ? row.Date.substring(0, 10)
-                                            : null,
-                                        value: Number(row.Value),
-                                    }))
-                                    .filter((row) => row.date != null);
-
-                                gdpValues.sort((a, b) =>
-                                    a.date < b.date
-                                        ? -1
-                                        : a.date > b.date
-                                        ? 1
-                                        : 0
-                                );
-
-                                if (gdpValues.length > 0) {
-                                    gdpWithGrowth =
-                                        computeGrowthSeries(gdpValues);
-                                    teOk = true;
-                                    console.log(
-                                        `TradingEconomics GDP loaded for ${countryKey}, points:`,
-                                        gdpWithGrowth.length
-                                    );
-                                } else {
-                                    console.warn(
-                                        `TradingEconomics returned no usable GDP values for ${countryKey}; falling back to World Bank.`
-                                    );
-                                }
-                            }
-                        } catch (teErr) {
-                            console.warn(
-                                `TradingEconomics error for ${countryKey}; falling back to World Bank:`,
-                                teErr
-                            );
-                        }
-                    }
-
-                    // Fallback if TE failed or gave no data
-                    if (!teOk) {
-                        gdpWithGrowth = await fetchWorldBankGdp(wbCode);
+                    } catch {
+                        // fallback to WHO if TE fails
+                        covidSeries = await fetchWhoCovid(covidKey);
                     }
                 } else {
-                    // preferred source is worldbank
+                    covidSeries = await fetchWhoCovid(covidKey);
+                }
+
+                // 2. GDP: preferred source with fallback
+                let gdpWithGrowth;
+                if (preferredSource === "tradingeconomics") {
+                    gdpWithGrowth = await fetchTradingEconomicsGdp(
+                        teGdpCountry,
+                        teApiKey,
+                        wbCode
+                    );
+                } else {
                     gdpWithGrowth = await fetchWorldBankGdp(wbCode);
                 }
 
-                //
-                // 3. Join GDP growth onto each daily COVID date (step-like)
-                //
+                // 3. Join GDP growth onto each COVID day
                 let j = 0;
-                const joined = covidWithNew.map((day) => {
+                const joined = covidSeries.map((day) => {
                     const dayDate = day.date;
                     while (
                         j + 1 < gdpWithGrowth.length &&
@@ -255,16 +311,16 @@ export function useCovidGdpApiData(countryKey) {
                         newCases: day.newCases,
                         confirmed: day.confirmed,
                         deaths: day.deaths,
+                        newDeaths: day.newDeaths,
                         gdpGrowth: gdpForDay ? gdpForDay.growth : null,
                     };
                 });
 
-                setCovidDaily(covidWithNew);
+                setCovidDaily(covidSeries);
                 setGdpSeries(gdpWithGrowth);
                 setCombined(joined);
                 setLoading(false);
             } catch (err) {
-                console.error("useCovidGdpApiData error:", err);
                 setError(err);
                 setLoading(false);
             }
@@ -273,7 +329,15 @@ export function useCovidGdpApiData(countryKey) {
         if (countryKey) {
             fetchData();
         }
-    }, [countryKey, covidKey, preferredSource, wbCode, teCountry, teApiKey]);
+    }, [
+        countryKey,
+        covidKey,
+        covidSource,
+        preferredSource,
+        wbCode,
+        teGdpCountry,
+        teApiKey,
+    ]);
 
     return { loading, error, covidDaily, gdpSeries, combined };
 }
