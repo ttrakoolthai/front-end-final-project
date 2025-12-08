@@ -12,8 +12,12 @@ import {
     Title,
 } from "chart.js";
 import { useCovidGdpApiData } from "../hooks/useCovidGdpApiData";
+import SummaryCard from "../components/SummaryCard";
+import DataPreviewTable from "../components/DataPreviewTable";
+import InfoModal from "../components/InfoModal";
+import { formatNumber } from "../utils/formatters";
+import { rollingAverage, computeTrend } from "../utils/dataTransforms";
 
-// Register Chart.js components
 ChartJS.register(
     CategoryScale,
     LinearScale,
@@ -37,49 +41,92 @@ const COUNTRY_CONFIG = [
     { key: "TH", label: "Thailand" },
 ];
 
-function formatNumber(n) {
-    if (n == null) return "—";
-    if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-    if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(1) + "K";
-    return n.toLocaleString();
+const lightTheme = {
+    background: "#f5f5f5",
+    textPrimary: "#111",
+    textSecondary: "#555",
+    textMuted: "#555", // darker for contrast
+    cardBg: "#ffffff",
+    border: "#e0e0e0",
+};
+
+function applyDateRange(data, range) {
+    if (!data || data.length === 0) return [];
+    if (range === "max") return data;
+
+    const n =
+        range === "30d" ? 30 : range === "90d" ? 90 : range === "1y" ? 365 : 0;
+    if (n === 0 || data.length <= n) return data;
+
+    return data.slice(-n);
 }
 
 function Dashboard() {
     const [selectedCountry, setSelectedCountry] = useState("US");
+    const [compareCountry, setCompareCountry] = useState("DE");
     const [covidSource, setCovidSource] = useState("who"); // "who" | "te"
+    const [viewMode, setViewMode] = useState("single"); // "single" | "compare"
+    const [showRolling, setShowRolling] = useState(false);
+    const [dateRange, setDateRange] = useState("max"); // "30d" | "90d" | "1y" | "max"
+    const [isInfoOpen, setIsInfoOpen] = useState(false);
 
-    const { loading, error, combined, covidDaily } = useCovidGdpApiData(
-        selectedCountry,
-        covidSource
-    );
+    const theme = lightTheme;
 
-    const latest = useMemo(() => {
-        if (!covidDaily || covidDaily.length === 0) return null;
-        return covidDaily[covidDaily.length - 1];
-    }, [covidDaily]);
-
-    const latestGdp = useMemo(() => {
-        if (!combined || combined.length === 0) return null;
-        const lastWithGdp = [...combined]
-            .reverse()
-            .find((d) => d.gdpGrowth != null);
-        return lastWithGdp || null;
-    }, [combined]);
+    // ---------- Primary country data ----------
+    const {
+        loading: loadingA,
+        error: errorA,
+        combined: combinedA,
+        covidDaily: covidDailyA,
+    } = useCovidGdpApiData(selectedCountry, covidSource);
 
     const covidSourceLabel =
         covidSource === "who"
             ? "WHO / Pomber timeseries"
             : "TradingEconomics (fallback to WHO)";
 
-    // Prepare chart data
-    const labels = combined ? combined.map((d) => d.date) : [];
+    const combinedAFiltered = useMemo(
+        () => applyDateRange(combinedA || [], dateRange),
+        [combinedA, dateRange]
+    );
 
-    const chartData = {
-        labels,
+    const latestA = useMemo(() => {
+        if (!covidDailyA || covidDailyA.length === 0) return null;
+        return covidDailyA[covidDailyA.length - 1];
+    }, [covidDailyA]);
+
+    const latestGdpA = useMemo(() => {
+        if (!combinedA || combinedA.length === 0) return null;
+        const lastWithGdp = [...combinedA]
+            .reverse()
+            .find((d) => d.gdpGrowth != null);
+        return lastWithGdp || null;
+    }, [combinedA]);
+
+    const newCasesSeriesA = combinedA ? combinedA.map((d) => d.newCases) : [];
+    const gdpSeriesA = combinedA ? combinedA.map((d) => d.gdpGrowth) : [];
+
+    const casesTrend = useMemo(
+        () => computeTrend(newCasesSeriesA, 7),
+        [newCasesSeriesA]
+    );
+    const gdpTrend = useMemo(() => computeTrend(gdpSeriesA, 8), [gdpSeriesA]);
+
+    // ---------- Single view datasets ----------
+    const labelsA = combinedAFiltered.map((d) => d.date);
+    const newCasesA = combinedAFiltered.map((d) => d.newCases);
+    const gdpA = combinedAFiltered.map((d) => d.gdpGrowth);
+
+    const newCasesPlotA = showRolling
+        ? rollingAverage(newCasesA, 7)
+        : newCasesA;
+
+    const timeSeriesDataSingle = {
+        labels: labelsA,
         datasets: [
             {
-                label: "New cases",
-                data: combined ? combined.map((d) => d.newCases) : [],
+                label: showRolling ? "New cases (7-day avg)" : "New cases",
+                data: newCasesPlotA,
                 borderColor: "#1976d2",
                 backgroundColor: "rgba(25, 118, 210, 0.15)",
                 borderWidth: 1.5,
@@ -88,18 +135,8 @@ function Dashboard() {
                 yAxisID: "yCases",
             },
             {
-                label: "New deaths",
-                data: combined ? combined.map((d) => d.newDeaths || 0) : [],
-                borderColor: "#d32f2f",
-                backgroundColor: "rgba(211, 47, 47, 0.15)",
-                borderWidth: 1,
-                pointRadius: 0,
-                tension: 0.25,
-                yAxisID: "yCases",
-            },
-            {
                 label: "GDP growth (%)",
-                data: combined ? combined.map((d) => d.gdpGrowth) : [],
+                data: gdpA,
                 borderColor: "#388e3c",
                 backgroundColor: "rgba(56, 142, 60, 0.15)",
                 borderWidth: 1.5,
@@ -110,32 +147,30 @@ function Dashboard() {
         ],
     };
 
-    const chartOptions = {
+    const timeSeriesOptionsSingle = {
         responsive: true,
         maintainAspectRatio: false,
         interaction: { mode: "index", intersect: false },
         plugins: {
             legend: {
                 position: "top",
-                labels: { font: { size: 11 } },
+                labels: { font: { size: 11 }, color: theme.textPrimary },
             },
             title: {
                 display: true,
-                text: "COVID–GDP co-dynamics over time",
+                text: "COVID-19 & GDP over time",
                 font: { size: 14 },
+                color: theme.textPrimary,
             },
             tooltip: {
                 callbacks: {
                     label: function (ctx) {
                         const label = ctx.dataset.label || "";
                         const value = ctx.raw;
-                        if (label === "New cases") {
+                        if (label.toLowerCase().includes("cases")) {
                             return `${label}: ${formatNumber(value)}`;
                         }
-                        if (label === "New deaths") {
-                            return `${label}: ${formatNumber(value)}`;
-                        }
-                        if (label === "GDP growth (%)") {
+                        if (label.includes("GDP growth")) {
                             if (value == null) return `${label}: —`;
                             return `${label}: ${value.toFixed(2)}%`;
                         }
@@ -149,128 +184,335 @@ function Dashboard() {
                 ticks: {
                     maxTicksLimit: 10,
                     font: { size: 10 },
+                    color: theme.textSecondary,
                 },
+                grid: { color: theme.border },
             },
             yCases: {
                 type: "linear",
                 position: "left",
-                title: { display: true, text: "New cases / deaths" },
+                title: {
+                    display: true,
+                    text: "New cases",
+                    color: theme.textSecondary,
+                },
                 ticks: {
                     callback: (v) => formatNumber(v),
                     font: { size: 10 },
+                    color: theme.textSecondary,
                 },
+                grid: { color: theme.border },
             },
             yGdp: {
                 type: "linear",
                 position: "right",
-                title: { display: true, text: "GDP growth (%)" },
-                grid: { drawOnChartArea: false },
+                title: {
+                    display: true,
+                    text: "GDP growth (%)",
+                    color: theme.textSecondary,
+                },
+                grid: { drawOnChartArea: false, color: theme.border },
                 ticks: {
                     callback: (v) => (v == null ? "" : `${v.toFixed(1)}%`),
                     font: { size: 10 },
+                    color: theme.textSecondary,
                 },
             },
         },
     };
 
+    // ---------- Comparison view data ----------
+    const {
+        loading: loadingB,
+        error: errorB,
+        combined: combinedB,
+        covidDaily: covidDailyB,
+    } = useCovidGdpApiData(compareCountry, covidSource);
+
+    const combinedBFiltered = useMemo(
+        () => applyDateRange(combinedB || [], dateRange),
+        [combinedB, dateRange]
+    );
+
+    const latestB = useMemo(() => {
+        if (!covidDailyB || covidDailyB.length === 0) return null;
+        return covidDailyB[covidDailyB.length - 1];
+    }, [covidDailyB]);
+
+    const latestGdpB = useMemo(() => {
+        if (!combinedB || combinedB.length === 0) return null;
+        const lastWithGdp = [...combinedB]
+            .reverse()
+            .find((d) => d.gdpGrowth != null);
+        return lastWithGdp || null;
+    }, [combinedB]);
+
+    const labelsCompare = combinedAFiltered.map((d) => d.date);
+    const mapB = new Map(combinedBFiltered.map((d) => [d.date, d]));
+
+    const casesACompare = combinedAFiltered.map((d) => d.newCases);
+    const casesBCompare = labelsCompare.map((date) => {
+        const row = mapB.get(date);
+        return row ? row.newCases : null;
+    });
+
+    const gdpACompare = combinedAFiltered.map((d) => d.gdpGrowth);
+    const gdpBCompare = labelsCompare.map((date) => {
+        const row = mapB.get(date);
+        return row ? row.gdpGrowth : null;
+    });
+
+    const timeSeriesDataCompare = {
+        labels: labelsCompare,
+        datasets: [
+            {
+                label: `New cases (${selectedCountry})`,
+                data: casesACompare,
+                borderColor: "#1976d2",
+                backgroundColor: "rgba(25, 118, 210, 0.15)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.25,
+                yAxisID: "yCases",
+            },
+            {
+                label: `New cases (${compareCountry})`,
+                data: casesBCompare,
+                borderColor: "#ff9800",
+                backgroundColor: "rgba(255, 152, 0, 0.12)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.25,
+                yAxisID: "yCases",
+            },
+            {
+                label: `GDP growth (%) (${selectedCountry})`,
+                data: gdpACompare,
+                borderColor: "#388e3c",
+                backgroundColor: "rgba(56, 142, 60, 0.15)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.25,
+                yAxisID: "yGdp",
+            },
+            {
+                label: `GDP growth (%) (${compareCountry})`,
+                data: gdpBCompare,
+                borderColor: "#9c27b0",
+                backgroundColor: "rgba(156, 39, 176, 0.15)",
+                borderWidth: 1.5,
+                pointRadius: 0,
+                tension: 0.25,
+                yAxisID: "yGdp",
+            },
+        ],
+    };
+
+    const timeSeriesOptionsCompare = {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+            legend: {
+                position: "top",
+                labels: { font: { size: 11 }, color: theme.textPrimary },
+            },
+            title: {
+                display: true,
+                text: "Country comparison: COVID-19 & GDP",
+                font: { size: 14 },
+                color: theme.textPrimary,
+            },
+            tooltip: {
+                callbacks: {
+                    label: function (ctx) {
+                        const label = ctx.dataset.label || "";
+                        const value = ctx.raw;
+                        if (label.toLowerCase().includes("cases")) {
+                            return `${label}: ${formatNumber(value)}`;
+                        }
+                        if (label.includes("GDP growth")) {
+                            if (value == null) return `${label}: —`;
+                            return `${label}: ${value.toFixed(2)}%`;
+                        }
+                        return `${label}: ${value}`;
+                    },
+                },
+            },
+        },
+        scales: {
+            x: {
+                ticks: {
+                    maxTicksLimit: 10,
+                    font: { size: 10 },
+                    color: theme.textSecondary,
+                },
+                grid: { color: theme.border },
+            },
+            yCases: {
+                type: "linear",
+                position: "left",
+                title: {
+                    display: true,
+                    text: "New cases",
+                    color: theme.textSecondary,
+                },
+                ticks: {
+                    callback: (v) => formatNumber(v),
+                    font: { size: 10 },
+                    color: theme.textSecondary,
+                },
+                grid: { color: theme.border },
+            },
+            yGdp: {
+                type: "linear",
+                position: "right",
+                title: {
+                    display: true,
+                    text: "GDP growth (%)",
+                    color: theme.textSecondary,
+                },
+                grid: { drawOnChartArea: false, color: theme.border },
+                ticks: {
+                    callback: (v) => (v == null ? "" : `${v.toFixed(1)}%`),
+                    font: { size: 10 },
+                    color: theme.textSecondary,
+                },
+            },
+        },
+    };
+
+    const loading = viewMode === "single" ? loadingA : loadingA || loadingB;
+    const error = viewMode === "single" ? errorA : errorA || errorB;
+
     return (
-        <div style={{ padding: "24px", maxWidth: 1200, margin: "0 auto" }}>
+        <main role="main" className="dashboard-container">
             {/* Header */}
-            <header
-                style={{
-                    marginBottom: 24,
-                    display: "flex",
-                    flexWrap: "wrap",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 16,
-                }}
-            >
+            <header className="dashboard-header">
                 <div>
                     <h1 style={{ margin: 0 }}>COVID–GDP Dashboard</h1>
                     <p
                         style={{
                             margin: "4px 0",
-                            color: "#555",
+                            color: theme.textSecondary,
                             maxWidth: 520,
+                            fontSize: 14,
                         }}
                     >
-                        Exploring Lotka–Volterra-style co-dynamics between{" "}
-                        <strong>COVID-19 spread</strong> and{" "}
-                        <strong>economic activity (GDP growth)</strong> using
-                        real data.
+                        Visualizing how{" "}
+                        <strong>COVID-19 cases and deaths</strong> relate to{" "}
+                        <strong>economic activity (GDP growth)</strong> across
+                        countries, using public datasets and a token-protected
+                        GDP API.
                     </p>
-                    <p style={{ margin: 0, fontSize: 12, color: "#777" }}>
+                    <p
+                        style={{
+                            margin: 0,
+                            fontSize: 13,
+                            color: theme.textMuted, // was #777, now darker
+                        }}
+                    >
                         COVID source: {covidSourceLabel}
                     </p>
                 </div>
 
-                {/* COVID Source Toggle */}
                 <div
                     style={{
                         display: "flex",
-                        alignItems: "center",
+                        flexDirection: "column",
+                        alignItems: "flex-end",
                         gap: 8,
-                        background: "#f5f5f5",
-                        padding: "4px 8px",
-                        borderRadius: 999,
                     }}
                 >
-                    <span style={{ fontSize: 12, color: "#555" }}>
-                        COVID data:
-                    </span>
+                    {/* COVID Source Toggle */}
+                    <div className="pill-toggle" aria-label="COVID data source">
+                        <span className="pill-toggle-label">COVID data:</span>
+                        <button
+                            type="button"
+                            onClick={() => setCovidSource("who")}
+                            className={covidSource === "who" ? "is-active" : ""}
+                        >
+                            WHO
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setCovidSource("te")}
+                            className={covidSource === "te" ? "is-active" : ""}
+                        >
+                            TE
+                        </button>
+                    </div>
+
                     <button
                         type="button"
-                        onClick={() => setCovidSource("who")}
-                        style={{
-                            borderRadius: 999,
-                            border: "none",
-                            padding: "6px 10px",
-                            fontSize: 12,
-                            cursor: "pointer",
-                            background:
-                                covidSource === "who"
-                                    ? "#1976d2"
-                                    : "transparent",
-                            color: covidSource === "who" ? "white" : "#1976d2",
-                        }}
+                        className="icon-button"
+                        onClick={() => setIsInfoOpen(true)}
                     >
-                        WHO
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setCovidSource("te")}
-                        style={{
-                            borderRadius: 999,
-                            border: "none",
-                            padding: "6px 10px",
-                            fontSize: 12,
-                            cursor: "pointer",
-                            background:
-                                covidSource === "te"
-                                    ? "#1976d2"
-                                    : "transparent",
-                            color: covidSource === "te" ? "white" : "#1976d2",
-                        }}
-                    >
-                        TE
+                        ⓘ About this dashboard
                     </button>
                 </div>
             </header>
 
-            {/* Country cards */}
-            <section style={{ marginBottom: 24 }}>
-                <h2 style={{ marginBottom: 8, fontSize: 18 }}>
-                    Select country
-                </h2>
-                <div
-                    style={{
-                        display: "grid",
-                        gridTemplateColumns:
-                            "repeat(auto-fit, minmax(120px, 1fr))",
-                        gap: 12,
-                    }}
-                >
+            {/* View mode toggle */}
+            <section className="section" aria-label="View mode">
+                <div className="pill-toggle">
+                    <button
+                        type="button"
+                        onClick={() => setViewMode("single")}
+                        className={viewMode === "single" ? "is-active" : ""}
+                    >
+                        Single country
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setViewMode("compare")}
+                        className={viewMode === "compare" ? "is-active" : ""}
+                    >
+                        Compare countries
+                    </button>
+                </div>
+            </section>
+
+            {/* Date range filter */}
+            <section className="section" aria-label="Date range">
+                <div className="pill-toggle">
+                    <span className="pill-toggle-label">Date range:</span>
+                    <button
+                        type="button"
+                        onClick={() => setDateRange("30d")}
+                        className={dateRange === "30d" ? "is-active" : ""}
+                    >
+                        30d
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setDateRange("90d")}
+                        className={dateRange === "90d" ? "is-active" : ""}
+                    >
+                        90d
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setDateRange("1y")}
+                        className={dateRange === "1y" ? "is-active" : ""}
+                    >
+                        1y
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setDateRange("max")}
+                        className={dateRange === "max" ? "is-active" : ""}
+                    >
+                        Max
+                    </button>
+                </div>
+            </section>
+
+            {/* Country selection */}
+            <section className="section" aria-label="Select country">
+                <h2 className="section-title">Select country</h2>
+
+                <div className="country-grid">
                     {COUNTRY_CONFIG.map((c) => {
                         const active = c.key === selectedCountry;
                         return (
@@ -278,283 +520,279 @@ function Dashboard() {
                                 key={c.key}
                                 type="button"
                                 onClick={() => setSelectedCountry(c.key)}
-                                style={{
-                                    padding: "10px 12px",
-                                    textAlign: "left",
-                                    borderRadius: 12,
-                                    border: active
-                                        ? "2px solid #1976d2"
-                                        : "1px solid #ddd",
-                                    background: active ? "#e3f2fd" : "white",
-                                    cursor: "pointer",
-                                    fontSize: 14,
-                                }}
+                                className={`country-card ${
+                                    active ? "is-active" : ""
+                                }`}
                             >
                                 <div style={{ fontWeight: 600 }}>{c.label}</div>
-                                <div style={{ fontSize: 11, color: "#777" }}>
-                                    {c.key}
-                                </div>
+                                <div className="country-card-code">{c.key}</div>
                             </button>
                         );
                     })}
                 </div>
             </section>
 
+            {/* Compare country selection */}
+            {viewMode === "compare" && (
+                <section
+                    className="section"
+                    aria-label="Compare with another country"
+                >
+                    <h3 className="section-title" style={{ fontSize: 16 }}>
+                        Compare with another country
+                    </h3>
+                    <div className="chip-row">
+                        {COUNTRY_CONFIG.filter(
+                            (c) => c.key !== selectedCountry
+                        ).map((c) => {
+                            const active = c.key === compareCountry;
+                            return (
+                                <button
+                                    key={c.key}
+                                    type="button"
+                                    onClick={() => setCompareCountry(c.key)}
+                                    className={`chip ${
+                                        active ? "is-active" : ""
+                                    }`}
+                                >
+                                    {c.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </section>
+            )}
+
             {/* Loading / Error */}
-            {loading && <div style={{ marginTop: 24 }}>Loading data…</div>}
+            {loading && (
+                <>
+                    <div className="loading-text">Loading data…</div>
+                    <section
+                        className="section summary-grid"
+                        aria-hidden="true"
+                    >
+                        <div className="card skeleton-card" />
+                        <div className="card skeleton-card" />
+                        <div className="card skeleton-card" />
+                        <div className="card skeleton-card" />
+                    </section>
+                    <section className="chart-card section" aria-hidden="true">
+                        <div className="skeleton-chart" />
+                    </section>
+                </>
+            )}
+
             {error && !loading && (
-                <div style={{ marginTop: 24, color: "crimson" }}>
+                <div className="error-text">
                     Error loading data: {error.message}
                 </div>
             )}
 
-            {/* Main content */}
-            {!loading && !error && (
+            {/* SINGLE VIEW */}
+            {!loading && !error && viewMode === "single" && (
                 <>
                     {/* Summary cards */}
                     <section
-                        style={{
-                            display: "grid",
-                            gridTemplateColumns:
-                                "repeat(auto-fit, minmax(180px, 1fr))",
-                            gap: 16,
-                            marginBottom: 24,
-                        }}
+                        className="section summary-grid"
+                        aria-label="Key metrics"
                     >
-                        <div
-                            style={{
-                                background: "white",
-                                borderRadius: 12,
-                                padding: 16,
-                                border: "1px solid #eee",
-                            }}
-                        >
-                            <div
-                                style={{
-                                    fontSize: 12,
-                                    color: "#777",
-                                    marginBottom: 4,
-                                }}
-                            >
-                                Latest new cases
-                            </div>
-                            <div style={{ fontSize: 22, fontWeight: 700 }}>
-                                {latest ? formatNumber(latest.newCases) : "—"}
-                            </div>
-                            <div
-                                style={{
-                                    fontSize: 11,
-                                    color: "#999",
-                                    marginTop: 4,
-                                }}
-                            >
-                                Source:{" "}
-                                {covidSource === "who" ? "WHO / Pomber" : "TE"}
-                            </div>
-                        </div>
+                        <SummaryCard
+                            theme={theme}
+                            title="Latest new cases"
+                            value={
+                                latestA ? formatNumber(latestA.newCases) : "—"
+                            }
+                            subtitle={`Source: ${
+                                covidSource === "who" ? "WHO / Pomber" : "TE"
+                            }`}
+                            trend={casesTrend}
+                            trendLabel="7-day trend"
+                        />
+                        <SummaryCard
+                            theme={theme}
+                            title="Total confirmed"
+                            value={
+                                latestA ? formatNumber(latestA.confirmed) : "—"
+                            }
+                        />
+                        <SummaryCard
+                            theme={theme}
+                            title="Total deaths"
+                            value={
+                                latestA && latestA.deaths != null
+                                    ? formatNumber(latestA.deaths)
+                                    : "—"
+                            }
+                        />
+                        <SummaryCard
+                            theme={theme}
+                            title="Latest GDP growth"
+                            value={
+                                latestGdpA && latestGdpA.gdpGrowth != null
+                                    ? `${latestGdpA.gdpGrowth.toFixed(1)}%`
+                                    : "—"
+                            }
+                            subtitle="GDP: World Bank + TradingEconomics (token)"
+                            trend={gdpTrend}
+                            trendLabel="Recent trend"
+                        />
+                    </section>
 
-                        <div
-                            style={{
-                                background: "white",
-                                borderRadius: 12,
-                                padding: 16,
-                                border: "1px solid #eee",
-                            }}
+                    {/* Rolling toggle */}
+                    <section className="rolling-toggle">
+                        <button
+                            type="button"
+                            onClick={() => setShowRolling((v) => !v)}
                         >
-                            <div
-                                style={{
-                                    fontSize: 12,
-                                    color: "#777",
-                                    marginBottom: 4,
-                                }}
-                            >
-                                Total confirmed
-                            </div>
-                            <div style={{ fontSize: 22, fontWeight: 700 }}>
-                                {latest ? formatNumber(latest.confirmed) : "—"}
-                            </div>
-                        </div>
-
-                        <div
-                            style={{
-                                background: "white",
-                                borderRadius: 12,
-                                padding: 16,
-                                border: "1px solid #eee",
-                            }}
-                        >
-                            <div
-                                style={{
-                                    fontSize: 12,
-                                    color: "#777",
-                                    marginBottom: 4,
-                                }}
-                            >
-                                Total deaths
-                            </div>
-                            <div style={{ fontSize: 22, fontWeight: 700 }}>
-                                {latest && latest.deaths != null
-                                    ? formatNumber(latest.deaths)
-                                    : "—"}
-                            </div>
-                        </div>
-
-                        <div
-                            style={{
-                                background: "white",
-                                borderRadius: 12,
-                                padding: 16,
-                                border: "1px solid #eee",
-                            }}
-                        >
-                            <div
-                                style={{
-                                    fontSize: 12,
-                                    color: "#777",
-                                    marginBottom: 4,
-                                }}
-                            >
-                                Latest GDP growth
-                            </div>
-                            <div style={{ fontSize: 22, fontWeight: 700 }}>
-                                {latestGdp && latestGdp.gdpGrowth != null
-                                    ? `${latestGdp.gdpGrowth.toFixed(1)}%`
-                                    : "—"}
-                            </div>
-                            <div
-                                style={{
-                                    fontSize: 11,
-                                    color: "#999",
-                                    marginTop: 4,
-                                }}
-                            >
-                                GDP: World Bank + TradingEconomics (token)
-                            </div>
-                        </div>
+                            {showRolling
+                                ? "Show daily values"
+                                : "Show 7-day averages"}
+                        </button>
                     </section>
 
                     {/* Time-series chart */}
-                    <section
-                        style={{
-                            background: "white",
-                            borderRadius: 12,
-                            padding: 16,
-                            border: "1px solid #eee",
-                            marginBottom: 24,
-                        }}
-                    >
-                        <h2 style={{ margin: "0 0 8px", fontSize: 18 }}>
+                    <section className="chart-card section">
+                        <h2 className="section-title">
                             COVID vs GDP over time
                         </h2>
-                        <p
-                            style={{
-                                margin: "0 0 12px",
-                                fontSize: 12,
-                                color: "#777",
-                            }}
-                        >
-                            Left axis: new COVID cases and deaths per day. Right
-                            axis: GDP growth (%). Peaks in GDP often precede
-                            peaks in cases, echoing the predator–prey intuition
-                            from Lotka–Volterra models.
+                        <p className="section-subtitle">
+                            Left axis: new COVID cases per day. Right axis: GDP
+                            growth (%). Use the date range filter above to zoom
+                            in on recent periods, similar to stock dashboards.
                         </p>
-                        <div style={{ width: "100%", height: 380 }}>
-                            <Line data={chartData} options={chartOptions} />
-                        </div>
-                    </section>
-
-                    {/* Optional raw data preview */}
-                    <section style={{ marginBottom: 24 }}>
-                        <h2 style={{ fontSize: 18, marginBottom: 8 }}>
-                            Sample of joined data
-                        </h2>
-                        <div
-                            style={{
-                                maxHeight: 260,
-                                overflow: "auto",
-                                borderRadius: 8,
-                                border: "1px solid #eee",
-                                background: "white",
-                            }}
-                        >
-                            <table
+                        <figure aria-label="Line chart showing COVID cases and GDP growth over time for the selected country.">
+                            <div className="chart-container">
+                                <Line
+                                    data={timeSeriesDataSingle}
+                                    options={timeSeriesOptionsSingle}
+                                />
+                            </div>
+                            <figcaption
                                 style={{
-                                    width: "100%",
-                                    borderCollapse: "collapse",
-                                    fontSize: 12,
+                                    fontSize: 11,
+                                    color: "#555",
+                                    marginTop: 4,
                                 }}
                             >
-                                <thead>
-                                    <tr
-                                        style={{
-                                            background: "#fafafa",
-                                            position: "sticky",
-                                            top: 0,
-                                        }}
-                                    >
-                                        <th style={thCell}>Date</th>
-                                        <th style={thCell}>New cases</th>
-                                        <th style={thCell}>New deaths</th>
-                                        <th style={thCell}>Confirmed</th>
-                                        <th style={thCell}>Deaths</th>
-                                        <th style={thCell}>GDP growth (%)</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {(combined || []).slice(-50).map((row) => (
-                                        <tr key={row.date}>
-                                            <td style={tdCell}>{row.date}</td>
-                                            <td style={tdCell}>
-                                                {formatNumber(row.newCases)}
-                                            </td>
-                                            <td style={tdCell}>
-                                                {row.newDeaths != null
-                                                    ? formatNumber(
-                                                          row.newDeaths
-                                                      )
-                                                    : "—"}
-                                            </td>
-                                            <td style={tdCell}>
-                                                {row.confirmed != null
-                                                    ? formatNumber(
-                                                          row.confirmed
-                                                      )
-                                                    : "—"}
-                                            </td>
-                                            <td style={tdCell}>
-                                                {row.deaths != null
-                                                    ? formatNumber(row.deaths)
-                                                    : "—"}
-                                            </td>
-                                            <td style={tdCell}>
-                                                {row.gdpGrowth != null
-                                                    ? row.gdpGrowth.toFixed(2)
-                                                    : "—"}
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                                Visual summary of the joined COVID–GDP dataset
+                                shown in the table below.
+                            </figcaption>
+                        </figure>
                     </section>
+
+                    {/* Data preview + CSV export */}
+                    <DataPreviewTable
+                        theme={theme}
+                        combined={combinedAFiltered}
+                        title="Sample of joined data"
+                    />
                 </>
             )}
-        </div>
+
+            {/* COMPARE VIEW */}
+            {!loading && !error && viewMode === "compare" && (
+                <>
+                    {/* Summary cards */}
+                    <section
+                        className="section summary-grid"
+                        aria-label="Key metrics (comparison)"
+                    >
+                        <SummaryCard
+                            theme={theme}
+                            title={`Latest new cases (${selectedCountry})`}
+                            value={
+                                latestA ? formatNumber(latestA.newCases) : "—"
+                            }
+                            subtitle={`Confirmed: ${
+                                latestA ? formatNumber(latestA.confirmed) : "—"
+                            }`}
+                        />
+                        <SummaryCard
+                            theme={theme}
+                            title={`Latest new cases (${compareCountry})`}
+                            value={
+                                latestB ? formatNumber(latestB.newCases) : "—"
+                            }
+                            subtitle={`Confirmed: ${
+                                latestB ? formatNumber(latestB.confirmed) : "—"
+                            }`}
+                        />
+                        <SummaryCard
+                            theme={theme}
+                            title={`Latest GDP growth (${selectedCountry})`}
+                            value={
+                                latestGdpA && latestGdpA.gdpGrowth != null
+                                    ? `${latestGdpA.gdpGrowth.toFixed(1)}%`
+                                    : "—"
+                            }
+                        />
+                        <SummaryCard
+                            theme={theme}
+                            title={`Latest GDP growth (${compareCountry})`}
+                            value={
+                                latestGdpB && latestGdpB.gdpGrowth != null
+                                    ? `${latestGdpB.gdpGrowth.toFixed(1)}%`
+                                    : "—"
+                            }
+                        />
+                    </section>
+
+                    {/* Comparison chart */}
+                    <section className="chart-card section">
+                        <h2 className="section-title">
+                            Country comparison: COVID & GDP
+                        </h2>
+                        <p className="section-subtitle">
+                            Compare daily new cases and GDP growth between two
+                            countries. Differences in policy, timing, and
+                            vaccine rollout often show up as different shapes in
+                            these curves.
+                        </p>
+                        <figure aria-label="Line chart comparing COVID cases and GDP growth between two countries.">
+                            <div className="chart-container">
+                                <Line
+                                    data={timeSeriesDataCompare}
+                                    options={timeSeriesOptionsCompare}
+                                />
+                            </div>
+                            <figcaption
+                                style={{
+                                    fontSize: 11,
+                                    color: "#555",
+                                    marginTop: 4,
+                                }}
+                            >
+                                Both countries are shown on the same date axis
+                                for direct comparison.
+                            </figcaption>
+                        </figure>
+                    </section>
+
+                    {/* Data preview */}
+                    <DataPreviewTable
+                        theme={theme}
+                        combined={combinedAFiltered}
+                        title={`Sample data (${selectedCountry})`}
+                    />
+                </>
+            )}
+
+            {/* Footer */}
+            <footer className="app-footer">
+                <div>
+                    Data sources: WHO, World Bank, TradingEconomics
+                    (token-protected GDP API).
+                </div>
+                <div>
+                    Built for CS564 Front-End Final Project &mdash;{" "}
+                    {new Date().getFullYear()}
+                </div>
+            </footer>
+
+            {/* Info modal */}
+            <InfoModal open={isInfoOpen} onClose={() => setIsInfoOpen(false)} />
+        </main>
     );
 }
-
-const thCell = {
-    padding: "6px 8px",
-    textAlign: "left",
-    borderBottom: "1px solid #eee",
-    position: "sticky",
-    top: 0,
-};
-
-const tdCell = {
-    padding: "6px 8px",
-    textAlign: "left",
-    borderBottom: "1px solid #f3f3f3",
-};
 
 export default Dashboard;
