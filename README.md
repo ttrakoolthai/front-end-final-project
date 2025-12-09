@@ -146,6 +146,7 @@ npm test
 
 -   Trading Economics API
     https://developer.tradingeconomics.com/
+-   https://www.stlouisfed.org
 
 ### Tools & Documentation
 
@@ -154,6 +155,20 @@ npm test
 -   axe‑core — https://www.deque.com/axe/
 -   Jest — https://jestjs.io
 -   React Testing Library — https://testing-library.com/
+
+### Misc
+
+-   https://github.com/public-apis/public-apis
+-   https://economicsfromthetopdown.com/2025/09/15/insights-from-the-lotka-volterra-model/
+-   https://pmc.ncbi.nlm.nih.gov/articles/PMC8205281/
+-   https://www.frontiersin.org/journals/systems-biology/articles/10.3389/fsysb.2022.1021897/full
+-   https://mc-stan.org/learn-stan/case-studies/lotka-volterra-predator-prey.html
+-   https://katalog.ub.uni-heidelberg.de/cgi-bin/titel.cgi?katkey=66489211
+-   https://borealisdata.ca/dataset.xhtml?persistentId=hdl:10864/11105
+-   http://people.whitman.edu/~hundledr/courses/M250F03/LynxHare.txt
+-   https://jckantor.github.io/CBE30338/02.05-Hare-and-Lynx-Population-Dynamics.html
+-   https://www.sciencedirect.com/science/article/pii/S0165489622000609#bib1
+-   https://www.sciencedirect.com/science/article/pii/S2211379721005490?ref=pdf_download&fr=RR-2&rr=9aafb5988f7376df
 
 ---
 
